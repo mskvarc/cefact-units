@@ -1,5 +1,5 @@
 [workspace]
-members = ["cefact-units-macros"]
+members = ["cefact-units-macros", "cefact-units"]
 resolver = "3"
 
 [workspace.package]
