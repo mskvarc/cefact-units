@@ -1,5 +1,10 @@
 # cefact-units
 
+[![Crates.io](https://img.shields.io/crates/v/cefact-units.svg)](https://crates.io/crates/cefact-units)
+[![Documentation](https://docs.rs/cefact-units/badge.svg)](https://docs.rs/cefact-units)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE.md)
+[![CI](https://github.com/mskvarc/cefact-units/actions/workflows/ci.yml/badge.svg)](https://github.com/mskvarc/cefact-units/actions/workflows/ci.yml)
+
 UN/CEFACT Recommendation No. 20 — Codes for Units of Measure Used in International Trade (Revision 17, 2021).
 
 All data is generated at compile time from `rec20.xlsx` and embedded as `static` data. No runtime allocations, no I/O.
@@ -31,6 +36,14 @@ for unit in UnitOfMeasure::ALL {
 
 - `serde` — Serialize/deserialize `UnitOfMeasure` and `UnitCode` as strings
 - `case-insensitive` — Case-insensitive code parsing
+
+## Minimum Supported Rust Version
+
+Rust 1.85 or later (edition 2024).
+
+## Data Attribution
+
+Unit code data is derived from [UN/CEFACT Recommendation No. 20](https://unece.org/trade/uncefact/cl-recommendations) maintained by the United Nations Economic Commission for Europe (UNECE). The data is provided for public use under UNECE's open data policy.
 
 ## License
 
