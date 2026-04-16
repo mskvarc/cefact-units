@@ -3,7 +3,6 @@
 [![Crates.io](https://img.shields.io/crates/v/cefact-units.svg)](https://crates.io/crates/cefact-units)
 [![Documentation](https://docs.rs/cefact-units/badge.svg)](https://docs.rs/cefact-units)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE.md)
-[![CI](https://github.com/mskvarc/cefact-units/actions/workflows/ci.yml/badge.svg)](https://github.com/mskvarc/cefact-units/actions/workflows/ci.yml)
 
 UN/CEFACT Recommendation No. 20 — Codes for Units of Measure Used in International Trade (Revision 17, 2021).
 
