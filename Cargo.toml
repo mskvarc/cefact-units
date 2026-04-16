@@ -6,3 +6,7 @@ resolver = "3"
 version = "0.1.0"
 edition = "2024"
 authors = ["Matej Škvarč <matej.skvarc@senlab.io>"]
+license = "MIT"
+repository = "https://github.com/mskvarc/cefact-units"
+keywords = ["units", "measurement", "cefact", "rec20", "iso"]
+categories = ["data-structures", "encoding"]

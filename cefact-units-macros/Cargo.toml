@@ -3,7 +3,12 @@ name = "cefact-units-macros"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
 description = "Proc-macro for generating UN/CEFACT unit code types"
+readme = "../README.md"
 
 [lib]
 proc-macro = true

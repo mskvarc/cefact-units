@@ -3,7 +3,12 @@ name = "cefact-units"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
 description = "UN/CEFACT Recommendation No. 20 — units of measure"
+readme = "../README.md"
 
 [features]
 default = []
@@ -12,7 +17,7 @@ case-insensitive = []
 generated-tests = []
 
 [dependencies]
-cefact-units-macros = { path = "../cefact-units-macros" }
+cefact-units-macros = { version = "0.1.0", path = "../cefact-units-macros" }
 serde = { version = "1.0.228", features = ["derive"], optional = true }
 
 [dev-dependencies]
