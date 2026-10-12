@@ -133,6 +133,7 @@ pub enum CodeList {
 /// The status a code takes from one revision of Recommendation No. 20 on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[non_exhaustive]
 pub struct StatusChange {
     /// Revision the status starts in.
     pub revision: Revision,
@@ -142,6 +143,7 @@ pub struct StatusChange {
 
 /// A source workbook the code tables are generated from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct SourceFile {
     /// Recommendation the workbook publishes.
     pub code_list: CodeList,
@@ -314,6 +316,7 @@ impl UnitCode {
 /// Everything the recommendations record for a [`UnitCode`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[non_exhaustive]
 pub struct UnitInfo {
     /// The common code as text (for example `"MTR"`, `"KGM"`).
     pub code: &'static str,
