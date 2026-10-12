@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Generates the cefact-units code tables from the UN/CEFACT Recommendation No. 20 sources"
+description = "Generates the cefact-units code tables from the UN/CEFACT Recommendation No. 20 and No. 21 sources"
 publish = false
 
 [dependencies]

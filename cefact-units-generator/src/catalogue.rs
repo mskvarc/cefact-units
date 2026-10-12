@@ -1,6 +1,16 @@
-//! The merged code list: one record per common code, whatever the number of rows listing it.
+//! The merged code list: one record per common code, whatever the number of rows and revisions listing it.
+//!
+//! A Recommendation No. 20 code takes its metadata from the latest revision and its status history from every
+//! revision. A Recommendation No. 21 package type code is listed from the oldest Recommendation No. 20 revision on,
+//! since introduction note 2 of every revision makes the package type codes common codes, and it takes the status the
+//! package type list gives it: the note refers users to that list for "the latest code elements".
 
+use crate::code_list::CodeList;
 use crate::generation_error::GenerationError;
+use crate::lifecycle::Lifecycle;
+use crate::lifecycle::RevisionRows;
+use crate::lifecycle::StatusChange;
+use crate::packaging_row::PackagingRow;
 use crate::status::Status;
 use crate::workbook_row::WorkbookRow;
 use heck::ToPascalCase;
@@ -28,11 +38,21 @@ pub struct UnitRecord {
     pub level_category: Option<String>,
     /// Description.
     pub description: Option<String>,
-    /// `Current` if any row is current, else `Deprecated` if any row is deprecated, else `Deleted`.
-    pub status: Status,
+    /// Recommendation the code is drawn from.
+    pub source: CodeList,
+    /// Status history.
+    pub lifecycle: Lifecycle,
 }
 
-/// Every code the sources list, in order of first appearance (Annex I first, then the Annex II and III additions).
+impl UnitRecord {
+    /// Status in the latest revision.
+    pub fn status(&self) -> Status {
+        self.lifecycle.latest_status()
+    }
+}
+
+/// Every code the sources list: the Recommendation No. 20 codes in order of first appearance in the latest revision
+/// (Annex I first, then the Annex II and III additions), then the package type codes in list order.
 #[derive(Debug)]
 pub struct Catalogue {
     /// One record per code.
@@ -49,30 +69,134 @@ struct CodeRows {
 }
 
 impl Catalogue {
-    /// Merges `rows`, in reading order, into one record per code and names each code's variant.
-    pub fn from_rows(rows: Vec<WorkbookRow>) -> Result<Catalogue, GenerationError> {
-        let mut code_names: HashMap<String, String> = HashMap::new();
-        let units = group_by_code(rows)
+    /// Builds the code list from the Recommendation No. 20 `revisions`, in ascending revision order, and the package
+    /// type `packaging` rows. A code the latest revision no longer lists fails, as does a code that would share its
+    /// variant name with another.
+    pub fn build(
+        mut revisions: Vec<RevisionRows>,
+        packaging: Vec<PackagingRow>,
+    ) -> Result<Catalogue, GenerationError> {
+        let oldest = revisions
+            .first()
+            .map(|revision| revision.revision)
+            .ok_or(GenerationError::NoRecommendation20Source)?;
+        let latest = revisions
+            .pop()
+            .ok_or(GenerationError::NoRecommendation20Source)?;
+        let mut traced = Lifecycle::trace(&revisions)?;
+        let mut listed: Vec<ListedUnit> = group_by_code(latest.rows)
             .into_iter()
             .map(CodeRows::merge)
             .map(|row| {
-                let code_variant = code_variant(&row.code);
+                let change = StatusChange {
+                    revision: latest.revision,
+                    status: row.status,
+                };
+                let lifecycle = match traced.remove(&row.code) {
+                    Some(mut earlier) => {
+                        earlier.record(change);
+                        earlier
+                    }
+                    None => Lifecycle::unchanged(change),
+                };
+                row.into_listed(lifecycle)
+            })
+            .collect();
+        if let Some((code, _)) = traced.into_iter().next() {
+            return Err(GenerationError::DroppedCode {
+                code,
+                revision: latest.revision,
+            });
+        }
+        listed.extend(
+            packaging
+                .into_iter()
+                .map(|row| ListedUnit::package_type(row, oldest)),
+        );
+        let mut code_names: HashMap<String, String> = HashMap::new();
+        let units = listed
+            .into_iter()
+            .map(|unit| {
+                let code_variant = code_variant(&unit.code);
                 match code_names.entry(code_variant) {
                     Entry::Occupied(taken) => Err(GenerationError::VariantCollision {
                         variant: taken.key().clone(),
                         first: taken.get().clone(),
-                        second: row.code,
+                        second: unit.code,
                     }),
                     Entry::Vacant(free) => {
                         // The map keeps its own copy of the code to name the first holder in a collision report.
                         let code_variant = free.key().clone();
-                        free.insert(row.code.clone());
-                        Ok(row.into_record(code_variant))
+                        free.insert(unit.code.clone());
+                        Ok(unit.into_record(code_variant))
                     }
                 }
             })
             .collect::<Result<_, _>>()?;
         Ok(Catalogue { units })
+    }
+}
+
+/// A code record before its variant is named.
+#[derive(Debug)]
+struct ListedUnit {
+    /// Common code.
+    code: String,
+    /// Unit name.
+    name: String,
+    /// Unit symbol.
+    symbol: Option<String>,
+    /// Measured quantity.
+    quantity: Option<String>,
+    /// Sector.
+    sector: Option<String>,
+    /// Informative conversion factor.
+    conversion_factor: Option<String>,
+    /// Level or category.
+    level_category: Option<String>,
+    /// Description.
+    description: Option<String>,
+    /// Recommendation the code is drawn from.
+    source: CodeList,
+    /// Status history.
+    lifecycle: Lifecycle,
+}
+
+impl ListedUnit {
+    /// A package type code, listed from the Recommendation No. 20 revision `oldest` on in the status its list gives.
+    fn package_type(row: PackagingRow, oldest: u16) -> ListedUnit {
+        ListedUnit {
+            code: row.code,
+            name: row.name,
+            symbol: None,
+            quantity: None,
+            sector: None,
+            conversion_factor: None,
+            level_category: None,
+            description: row.description,
+            source: CodeList::Recommendation21,
+            lifecycle: Lifecycle::unchanged(StatusChange {
+                revision: oldest,
+                status: row.status,
+            }),
+        }
+    }
+
+    /// Completes the record with its variant name.
+    fn into_record(self, code_variant: String) -> UnitRecord {
+        UnitRecord {
+            code: self.code,
+            code_variant,
+            name: self.name,
+            symbol: self.symbol,
+            quantity: self.quantity,
+            sector: self.sector,
+            conversion_factor: self.conversion_factor,
+            level_category: self.level_category,
+            description: self.description,
+            source: self.source,
+            lifecycle: self.lifecycle,
+        }
     }
 }
 
@@ -100,11 +224,10 @@ struct MergedRow {
 }
 
 impl MergedRow {
-    /// Completes the record with its variant name.
-    fn into_record(self, code_variant: String) -> UnitRecord {
-        UnitRecord {
+    /// The Recommendation No. 20 code with its status history.
+    fn into_listed(self, lifecycle: Lifecycle) -> ListedUnit {
+        ListedUnit {
             code: self.code,
-            code_variant,
             name: self.name,
             symbol: self.symbol,
             quantity: self.quantity,
@@ -112,7 +235,8 @@ impl MergedRow {
             conversion_factor: self.conversion_factor,
             level_category: self.level_category,
             description: self.description,
-            status: self.status,
+            source: CodeList::Recommendation20,
+            lifecycle,
         }
     }
 }
@@ -189,6 +313,11 @@ mod tests {
     use crate::annex::Annex;
     use crate::catalogue::Catalogue;
     use crate::catalogue::UnitRecord;
+    use crate::code_list::CodeList;
+    use crate::generation_error::GenerationError;
+    use crate::lifecycle::RevisionRows;
+    use crate::lifecycle::StatusChange;
+    use crate::packaging_row::PackagingRow;
     use crate::status::Status;
     use crate::workbook_row::WorkbookRow;
 
@@ -215,9 +344,22 @@ mod tests {
     }
 
     fn units(rows: Vec<WorkbookRow>) -> Vec<UnitRecord> {
-        Catalogue::from_rows(rows)
+        Catalogue::build(vec![RevisionRows { revision: 17, rows }], Vec::new())
             .map(|catalogue| catalogue.units)
             .unwrap_or_default()
+    }
+
+    fn package_type(code: &str, name: &str, status: Status) -> PackagingRow {
+        PackagingRow {
+            status,
+            code: code.to_owned(),
+            name: name.to_owned(),
+            description: None,
+        }
+    }
+
+    const fn change(revision: u16, status: Status) -> StatusChange {
+        StatusChange { revision, status }
     }
 
     #[test]
@@ -231,7 +373,7 @@ mod tests {
         ]);
         let statuses: Vec<_> = merged
             .iter()
-            .map(|unit| (unit.code.as_str(), unit.status))
+            .map(|unit| (unit.code.as_str(), unit.status()))
             .collect();
         assert_eq!(
             statuses,
@@ -251,7 +393,7 @@ mod tests {
         ]);
         let names: Vec<_> = merged
             .iter()
-            .map(|unit| (unit.name.as_str(), unit.status))
+            .map(|unit| (unit.name.as_str(), unit.status()))
             .collect();
         assert_eq!(names, [("AA at 9", Status::Current)]);
     }
@@ -334,5 +476,153 @@ mod tests {
             .map(|unit| unit.code_variant.as_str())
             .collect();
         assert_eq!(variants, ["Kgm", "A91", "Code10"]);
+    }
+
+    #[test]
+    fn a_code_takes_its_metadata_from_the_latest_revision_and_its_history_from_every_revision() {
+        let mut earlier = row(
+            Annex::TwoAndThree,
+            2,
+            "AA",
+            Status::Current,
+            Some("old text"),
+        );
+        earlier.name = "old name".to_owned();
+        let catalogue = Catalogue::build(
+            vec![
+                RevisionRows {
+                    revision: 9,
+                    rows: vec![earlier],
+                },
+                RevisionRows {
+                    revision: 17,
+                    rows: vec![row(Annex::TwoAndThree, 2, "AA", Status::Deprecated, None)],
+                },
+            ],
+            Vec::new(),
+        );
+        let read: Vec<_> = catalogue
+            .iter()
+            .flat_map(|catalogue| &catalogue.units)
+            .map(|unit| {
+                (
+                    unit.name.as_str(),
+                    unit.description.as_deref(),
+                    unit.status(),
+                    unit.lifecycle.history().collect::<Vec<_>>(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            read,
+            [(
+                "AA at 2",
+                None,
+                Status::Deprecated,
+                vec![change(9, Status::Current), change(17, Status::Deprecated)]
+            )]
+        );
+    }
+
+    #[test]
+    fn a_code_the_latest_revision_drops_fails_generation() {
+        let catalogue = Catalogue::build(
+            vec![
+                RevisionRows {
+                    revision: 16,
+                    rows: vec![
+                        row(Annex::TwoAndThree, 2, "AA", Status::Current, None),
+                        row(Annex::TwoAndThree, 3, "BB", Status::Current, None),
+                    ],
+                },
+                RevisionRows {
+                    revision: 17,
+                    rows: vec![row(Annex::TwoAndThree, 2, "BB", Status::Current, None)],
+                },
+            ],
+            Vec::new(),
+        );
+        assert!(matches!(
+            catalogue,
+            Err(GenerationError::DroppedCode { ref code, revision: 17 }) if code == "AA"
+        ));
+    }
+
+    #[test]
+    fn package_type_codes_are_listed_from_the_oldest_revision_in_their_list_status() {
+        let catalogue = Catalogue::build(
+            vec![
+                RevisionRows {
+                    revision: 4,
+                    rows: vec![row(Annex::TwoAndThree, 2, "KGM", Status::Current, None)],
+                },
+                RevisionRows {
+                    revision: 17,
+                    rows: vec![row(Annex::TwoAndThree, 2, "KGM", Status::Current, None)],
+                },
+            ],
+            vec![
+                package_type("XAE", "Aerosol", Status::Current),
+                package_type("XSX", "Set", Status::Deleted),
+            ],
+        );
+        let read: Vec<_> = catalogue
+            .iter()
+            .flat_map(|catalogue| &catalogue.units)
+            .map(|unit| {
+                (
+                    unit.code.as_str(),
+                    unit.code_variant.as_str(),
+                    unit.source,
+                    unit.lifecycle.history().collect::<Vec<_>>(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            read,
+            [
+                (
+                    "KGM",
+                    "Kgm",
+                    CodeList::Recommendation20,
+                    vec![change(4, Status::Current)]
+                ),
+                (
+                    "XAE",
+                    "Xae",
+                    CodeList::Recommendation21,
+                    vec![change(4, Status::Current)]
+                ),
+                (
+                    "XSX",
+                    "Xsx",
+                    CodeList::Recommendation21,
+                    vec![change(4, Status::Deleted)]
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_package_type_code_spelling_a_recommendation_20_code_fails_generation() {
+        let catalogue = Catalogue::build(
+            vec![RevisionRows {
+                revision: 17,
+                rows: vec![row(Annex::TwoAndThree, 2, "XAE", Status::Current, None)],
+            }],
+            vec![package_type("XAE", "Aerosol", Status::Current)],
+        );
+        assert!(matches!(
+            catalogue,
+            Err(GenerationError::VariantCollision { ref first, ref second, .. }) if first == "XAE" && second == "XAE"
+        ));
+    }
+
+    #[test]
+    fn no_recommendation_20_source_fails_generation() {
+        assert!(matches!(
+            Catalogue::build(Vec::new(), Vec::new()),
+            Err(GenerationError::NoRecommendation20Source)
+        ));
     }
 }

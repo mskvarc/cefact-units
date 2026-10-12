@@ -3,10 +3,12 @@
 use crate::annex::Annex;
 use crate::annex::Layout;
 use crate::generation_error::GenerationError;
+use crate::marker_erratum::intended_marker;
+use crate::sheet_text::RowPosition;
+use crate::sheet_text::cell_text;
 use crate::status::Status;
 use calamine::Data;
 use calamine::Range;
-use unicode_normalization::UnicodeNormalization;
 
 /// A row of a code sheet. Every row is read, whatever its status.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,18 +37,10 @@ pub struct WorkbookRow {
     pub description: Option<String>,
 }
 
-/// Position of a row, for error reports.
-#[derive(Debug, Clone, Copy)]
-struct RowPosition {
-    /// Sheet name.
-    sheet: &'static str,
-    /// One-based row number.
-    row: u32,
-}
-
 impl WorkbookRow {
-    /// Reads every code row of `annex` from its sheet range, after checking the header row.
+    /// Reads every code row of `annex` from its sheet range in `revision`, after checking the header row.
     pub fn read_sheet(
+        revision: u16,
         annex: Annex,
         range: &Range<Data>,
     ) -> Result<Vec<WorkbookRow>, GenerationError> {
@@ -64,6 +58,7 @@ impl WorkbookRow {
         layout.check_headers(header)?;
         rows.map(|(cells, row)| {
             WorkbookRow::read(
+                revision,
                 annex,
                 layout,
                 cells,
@@ -76,8 +71,10 @@ impl WorkbookRow {
         .collect()
     }
 
-    /// Reads one code row. A row without a code or a name, with an unknown marker or with a malformed code fails.
+    /// Reads one code row. A row without a code or a name, with an unknown marker or with a malformed code fails. A
+    /// misprinted marker reads as the marker it stands for.
     fn read(
+        revision: u16,
         annex: Annex,
         layout: &Layout,
         cells: &[Data],
@@ -85,12 +82,6 @@ impl WorkbookRow {
     ) -> Result<WorkbookRow, GenerationError> {
         let text = |column: usize| cell_text(cells, column, position);
         let optional = |column: Option<usize>| column.map_or(Ok(None), text);
-        let marker = text(layout.status)?.unwrap_or_default();
-        let status = Status::from_marker(&marker).ok_or(GenerationError::UnknownStatusMarker {
-            sheet: position.sheet,
-            row: position.row,
-            marker,
-        })?;
         let code = text(layout.code)?.ok_or(GenerationError::MissingCell {
             sheet: position.sheet,
             row: position.row,
@@ -103,6 +94,14 @@ impl WorkbookRow {
                 code,
             });
         }
+        let marker = text(layout.status)?.unwrap_or_default();
+        let status = Status::from_marker(intended_marker(revision, &code, &marker)).ok_or(
+            GenerationError::UnknownStatusMarker {
+                sheet: position.sheet,
+                row: position.row,
+                marker,
+            },
+        )?;
         let name = text(layout.name)?.ok_or(GenerationError::MissingCell {
             sheet: position.sheet,
             row: position.row,
@@ -135,36 +134,6 @@ pub fn is_common_code_shape(code: &str) -> bool {
         && code
             .bytes()
             .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit())
-}
-
-/// Text of one cell: trimmed, NFC-normalised, with U+2126 OHM SIGN read as U+03A9 GREEK CAPITAL LETTER OMEGA
-/// (its canonical decomposition). An empty or blank cell is `None`; a cell of a kind no column carries fails.
-fn cell_text(
-    cells: &[Data],
-    column: usize,
-    position: RowPosition,
-) -> Result<Option<String>, GenerationError> {
-    let raw = match cells.get(column) {
-        None | Some(Data::Empty) => return Ok(None),
-        Some(Data::String(text)) => text.trim().to_owned(),
-        Some(Data::Float(number)) => number.to_string(),
-        Some(Data::Int(number)) => number.to_string(),
-        Some(
-            found @ (Data::Bool(_)
-            | Data::DateTime(_)
-            | Data::DateTimeIso(_)
-            | Data::DurationIso(_)
-            | Data::Error(_)),
-        ) => {
-            return Err(GenerationError::UnexpectedCell {
-                sheet: position.sheet,
-                row: position.row,
-                column,
-                found: format!("{found:?}"),
-            });
-        }
-    };
-    Ok((!raw.is_empty()).then(|| raw.replace('\u{2126}', "\u{03A9}").nfc().collect()))
 }
 
 #[cfg(test)]
@@ -208,7 +177,7 @@ mod tests {
             ["D", "A1", "15 °C calorie", "", "", "", ""],
             ["X", "KTM", "kilometre", "", "", "", ""],
         ]);
-        let rows = WorkbookRow::read_sheet(Annex::TwoAndThree, &range);
+        let rows = WorkbookRow::read_sheet(17, Annex::TwoAndThree, &range);
         let statuses: Vec<_> = rows
             .iter()
             .flatten()
@@ -227,7 +196,7 @@ mod tests {
     #[test]
     fn an_unknown_marker_fails_naming_the_sheet_row_and_marker() {
         let range = sheet(&[["?", "KGM", "kilogram", "", "", "", ""]]);
-        let error = WorkbookRow::read_sheet(Annex::TwoAndThree, &range);
+        let error = WorkbookRow::read_sheet(17, Annex::TwoAndThree, &range);
         assert!(matches!(
             error,
             Err(GenerationError::UnknownStatusMarker { sheet: "Annex II & Annex III", row: 2, ref marker })
@@ -238,7 +207,7 @@ mod tests {
     #[test]
     fn a_row_without_a_code_fails() {
         let range = sheet(&[["", "", "kilogram", "", "", "", ""]]);
-        let error = WorkbookRow::read_sheet(Annex::TwoAndThree, &range);
+        let error = WorkbookRow::read_sheet(17, Annex::TwoAndThree, &range);
         assert!(matches!(
             error,
             Err(GenerationError::MissingCell {
@@ -252,7 +221,7 @@ mod tests {
     #[test]
     fn a_row_without_a_name_fails() {
         let range = sheet(&[["", "KGM", "", "", "", "", ""]]);
-        let error = WorkbookRow::read_sheet(Annex::TwoAndThree, &range);
+        let error = WorkbookRow::read_sheet(17, Annex::TwoAndThree, &range);
         assert!(matches!(
             error,
             Err(GenerationError::MissingCell {
@@ -266,37 +235,27 @@ mod tests {
     #[test]
     fn a_malformed_code_fails() {
         let range = sheet(&[["", "kgm", "kilogram", "", "", "", ""]]);
-        let error = WorkbookRow::read_sheet(Annex::TwoAndThree, &range);
+        let error = WorkbookRow::read_sheet(17, Annex::TwoAndThree, &range);
         assert!(
             matches!(error, Err(GenerationError::MalformedCode { row: 2, ref code, .. }) if code == "kgm")
         );
     }
 
     #[test]
-    fn a_cell_of_an_unexpected_kind_fails() {
-        let mut range = sheet(&[["", "KGM", "kilogram", "", "", "", ""]]);
-        range.set_value((1, 5), Data::Bool(true));
-        let error = WorkbookRow::read_sheet(Annex::TwoAndThree, &range);
+    fn a_listed_misprint_reads_as_its_intended_marker() {
+        let range = sheet(&[["\u{D7}", "KTM", "kilometre", "", "", "", ""]]);
+        let in_revision_11 = WorkbookRow::read_sheet(11, Annex::TwoAndThree, &range);
+        assert_eq!(
+            in_revision_11
+                .ok()
+                .map(|rows| rows.iter().map(|row| row.status).collect::<Vec<_>>()),
+            Some(vec![Status::Deleted])
+        );
+        let in_revision_13 = WorkbookRow::read_sheet(13, Annex::TwoAndThree, &range);
         assert!(matches!(
-            error,
-            Err(GenerationError::UnexpectedCell {
-                row: 2,
-                column: 5,
-                ..
-            })
+            in_revision_13,
+            Err(GenerationError::UnknownStatusMarker { ref marker, .. }) if marker == "\u{D7}"
         ));
-    }
-
-    #[test]
-    fn cell_text_is_trimmed_and_the_ohm_sign_becomes_omega() {
-        let range = sheet(&[["", "OHM", "  ohm  ", "", "", "\u{2126}", ""]]);
-        let rows = WorkbookRow::read_sheet(Annex::TwoAndThree, &range);
-        let read: Vec<_> = rows
-            .iter()
-            .flatten()
-            .map(|row| (row.name.as_str(), row.symbol.as_deref()))
-            .collect();
-        assert_eq!(read, [("ohm", Some("\u{03A9}"))]);
     }
 
     #[test]

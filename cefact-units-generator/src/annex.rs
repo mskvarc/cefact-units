@@ -1,6 +1,8 @@
-//! The two code sheets of a Recommendation No. 20 workbook and the column each field is read from.
+//! The two code sheets of a Recommendation No. 20 workbook and the column each field is read from. Every revision
+//! from 4 to 17 lays them out the same way.
 
 use crate::generation_error::GenerationError;
+use crate::sheet_text::check_headers;
 use calamine::Data;
 
 /// A code sheet. The order is the tie-break between rows of equal status: Annex I wins.
@@ -39,7 +41,7 @@ pub struct Layout {
     pub description: usize,
 }
 
-/// Annex I columns of Revision 17.
+/// Annex I columns.
 const ANNEX_ONE: Layout = Layout {
     sheet: "Annex I",
     headers: &[
@@ -66,7 +68,7 @@ const ANNEX_ONE: Layout = Layout {
     description: 10,
 };
 
-/// Annex II and Annex III columns of Revision 17.
+/// Annex II and Annex III columns.
 const ANNEX_TWO_AND_THREE: Layout = Layout {
     sheet: "Annex II & Annex III",
     headers: &[
@@ -105,35 +107,13 @@ impl Annex {
 impl Layout {
     /// Refuses a header row that does not name every column at the position the layout reads it from.
     pub fn check_headers(&self, header: &[Data]) -> Result<(), GenerationError> {
-        self.headers
-            .iter()
-            .enumerate()
-            .try_for_each(|(column, expected)| {
-                let found = header
-                    .get(column)
-                    .map(Data::to_string)
-                    .unwrap_or_default()
-                    .split_whitespace()
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                if found == *expected {
-                    Ok(())
-                } else {
-                    Err(GenerationError::UnexpectedHeader {
-                        sheet: self.sheet,
-                        column,
-                        expected,
-                        found,
-                    })
-                }
-            })
+        check_headers(self.sheet, self.headers, header)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::annex::Annex;
-    use crate::generation_error::GenerationError;
     use calamine::Data;
 
     fn header(names: &[&str]) -> Vec<Data> {
@@ -155,42 +135,6 @@ mod tests {
             "Conversion Factor",
         ]);
         assert!(Annex::TwoAndThree.layout().check_headers(&row).is_ok());
-    }
-
-    #[test]
-    fn a_moved_column_fails_the_header_check_naming_the_column() {
-        let row = header(&[
-            "Common Code",
-            "Status",
-            "Name",
-            "Description",
-            "Level / Category",
-            "Symbol",
-            "Conversion Factor",
-        ]);
-        let error = Annex::TwoAndThree.layout().check_headers(&row);
-        assert!(matches!(
-            error,
-            Err(GenerationError::UnexpectedHeader {
-                column: 0,
-                expected: "Status",
-                ..
-            })
-        ));
-    }
-
-    #[test]
-    fn a_missing_column_fails_the_header_check() {
-        let row = header(&["Status", "Common Code"]);
-        let error = Annex::TwoAndThree.layout().check_headers(&row);
-        assert!(matches!(
-            error,
-            Err(GenerationError::UnexpectedHeader {
-                column: 2,
-                expected: "Name",
-                ..
-            })
-        ));
     }
 
     #[test]

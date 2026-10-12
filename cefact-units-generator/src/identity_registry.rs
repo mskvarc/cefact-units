@@ -166,10 +166,13 @@ impl IdentityRegistry {
 #[cfg(test)]
 mod tests {
     use crate::catalogue::UnitRecord;
+    use crate::code_list::CodeList;
     use crate::generation_error::GenerationError;
     use crate::identity_registry::Assignment;
     use crate::identity_registry::Identity;
     use crate::identity_registry::IdentityRegistry;
+    use crate::lifecycle::Lifecycle;
+    use crate::lifecycle::StatusChange;
     use crate::status::Status;
 
     fn unit(code: &str) -> UnitRecord {
@@ -183,7 +186,11 @@ mod tests {
             conversion_factor: None,
             level_category: None,
             description: None,
-            status: Status::Current,
+            source: CodeList::Recommendation20,
+            lifecycle: Lifecycle::unchanged(StatusChange {
+                revision: 17,
+                status: Status::Current,
+            }),
         }
     }
 

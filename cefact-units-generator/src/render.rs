@@ -1,21 +1,23 @@
 //! Rendering of the identified code records as the Rust source `cefact-units/src/generated.rs`.
 //!
-//! The output holds only what follows from the code list: the `UnitCode` enum, `ALL`, the record table, the
-//! text-ordered lookup table, `LATEST_REVISION` and `SOURCES`. Every type and impl that does not vary with the codes is
+//! The output holds only what follows from the code list: the `UnitCode` enum, `ALL`, the record table with each code's
+//! status history, the text-ordered lookup table, `LATEST_REVISION` and `SOURCES`. Every type and impl that does not vary with the codes is
 //! written by hand in `cefact-units/src/lib.rs`, which includes this file. The per-code data is constant tables rather
 //! than `match` arms, so no generated function grows with the code list.
 
 use crate::catalogue::UnitRecord;
+use crate::code_list::CodeList;
 use crate::generation_error::GenerationError;
 use crate::identity_registry::IdentifiedUnit;
+use crate::lifecycle::StatusChange;
 use crate::source_file::SourceFile;
 use crate::status::Status;
 use std::fmt::Write;
 
-/// Renders the generated file for `units`, in identity order, read from `source`.
+/// Renders the generated file for `units`, in identity order, read from `sources`.
 pub fn render(
     units: &[IdentifiedUnit<'_>],
-    source: &SourceFile,
+    sources: &[SourceFile],
 ) -> Result<String, GenerationError> {
     let records: Vec<&UnitRecord> = units.iter().map(|identified| identified.unit).collect();
     let mut out = String::new();
@@ -27,7 +29,7 @@ pub fn render(
     render_all(&mut out, &records)?;
     render_records(&mut out, &records)?;
     render_codes_by_text(&mut out, &records)?;
-    render_sources(&mut out, source)?;
+    render_sources(&mut out, sources)?;
     Ok(out)
 }
 
@@ -61,7 +63,7 @@ fn render_unit_code_enum(
             "    /// `{}`: {}.{}",
             unit.code,
             quoted_name(&unit.name),
-            status_note(unit.status)
+            status_note(unit.status())
         )?;
         writeln!(
             out,
@@ -117,7 +119,19 @@ fn render_records(out: &mut String, units: &[&UnitRecord]) -> Result<(), Generat
                 optional_literal(value.as_deref())
             )?;
         }
-        writeln!(out, "        status: {},", status_path(unit.status))?;
+        writeln!(out, "        status: {},", unit.status().library_path())?;
+        writeln!(out, "        source: {},", unit.source.library_path())?;
+        writeln!(
+            out,
+            "        first_listed: Revision({}),",
+            unit.lifecycle.first_listed.revision
+        )?;
+        let history: Vec<String> = unit
+            .lifecycle
+            .history()
+            .map(status_change_literal)
+            .collect();
+        writeln!(out, "        history: &[{}],", history.join(", "))?;
         writeln!(out, "    }},")?;
     }
     writeln!(out, "];")?;
@@ -142,12 +156,13 @@ fn render_codes_by_text(out: &mut String, units: &[&UnitRecord]) -> Result<(), G
 }
 
 /// `LATEST_REVISION` and `SOURCES`.
-fn render_sources(out: &mut String, source: &SourceFile) -> Result<(), GenerationError> {
-    let digest: Vec<String> = source
-        .sha256
+fn render_sources(out: &mut String, sources: &[SourceFile]) -> Result<(), GenerationError> {
+    let latest = sources
         .iter()
-        .map(|byte| format!("0x{byte:02x}"))
-        .collect();
+        .filter(|source| source.code_list == CodeList::Recommendation20)
+        .map(|source| source.revision)
+        .max()
+        .ok_or(GenerationError::NoRecommendation20Source)?;
     writeln!(out)?;
     writeln!(
         out,
@@ -155,18 +170,31 @@ fn render_sources(out: &mut String, source: &SourceFile) -> Result<(), Generatio
     )?;
     writeln!(
         out,
-        "pub const LATEST_REVISION: Revision = Revision({});",
-        source.revision
+        "pub const LATEST_REVISION: Revision = Revision({latest});"
     )?;
     writeln!(out)?;
     writeln!(
         out,
-        "/// Every source workbook the code list is generated from."
+        "/// Every source workbook the code list is generated from, ascending by recommendation and then by revision."
     )?;
-    writeln!(out, "pub const SOURCES: &[SourceFile] = &[SourceFile {{")?;
-    writeln!(out, "    revision: Revision({}),", source.revision)?;
-    writeln!(out, "    sha256: [{}],", digest.join(", "))?;
-    writeln!(out, "}}];")?;
+    writeln!(out, "pub const SOURCES: &[SourceFile] = &[")?;
+    for source in sources {
+        let digest: Vec<String> = source
+            .sha256
+            .iter()
+            .map(|byte| format!("0x{byte:02x}"))
+            .collect();
+        writeln!(out, "    SourceFile {{")?;
+        writeln!(
+            out,
+            "        code_list: {},",
+            source.code_list.library_path()
+        )?;
+        writeln!(out, "        revision: Revision({}),", source.revision)?;
+        writeln!(out, "        sha256: [{}],", digest.join(", "))?;
+        writeln!(out, "    }},")?;
+    }
+    writeln!(out, "];")?;
     Ok(())
 }
 
@@ -191,21 +219,25 @@ fn optional_literal(value: Option<&str>) -> String {
     value.map_or_else(|| "None".to_owned(), |text| format!("Some({text:?})"))
 }
 
-/// Path of the library `Status` variant for `status`.
-const fn status_path(status: Status) -> &'static str {
-    match status {
-        Status::Current => "Status::Current",
-        Status::Deprecated => "Status::Deprecated",
-        Status::Deleted => "Status::Deleted",
-    }
+/// A library `StatusChange` literal.
+fn status_change_literal(change: StatusChange) -> String {
+    format!(
+        "StatusChange {{ revision: Revision({}), status: {} }}",
+        change.revision,
+        change.status.library_path()
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use crate::catalogue::UnitRecord;
+    use crate::code_list::CodeList;
     use crate::identity_registry::IdentityRegistry;
+    use crate::lifecycle::Lifecycle;
+    use crate::lifecycle::StatusChange;
     use crate::render::quoted_name;
     use crate::render::render_codes_by_text;
+    use crate::render::render_records;
     use crate::render::render_unit_code_enum;
     use crate::status::Status;
 
@@ -220,7 +252,11 @@ mod tests {
             conversion_factor: None,
             level_category: None,
             description: None,
-            status,
+            source: CodeList::Recommendation20,
+            lifecycle: Lifecycle::unchanged(StatusChange {
+                revision: 4,
+                status,
+            }),
         }
     }
 
@@ -277,6 +313,32 @@ mod tests {
         assert!(
             out.contains(
                 "    UnitCode::10,\n    UnitCode::A1,\n    UnitCode::A10,\n    UnitCode::KGM,\n];\n"
+            ),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn a_record_carries_its_source_first_listing_and_history() {
+        let mut reinstated = unit("HH", "hundred cubic metre", Status::Deleted);
+        reinstated.lifecycle.record(StatusChange {
+            revision: 5,
+            status: Status::Current,
+        });
+        let mut packaging = unit("XAE", "Aerosol", Status::Current);
+        packaging.source = CodeList::Recommendation21;
+        let records = [&reinstated, &packaging];
+        let mut out = String::new();
+        assert!(render_records(&mut out, &records).is_ok());
+        assert!(
+            out.contains(
+                "        status: Status::Current,\n        source: CodeList::Recommendation20,\n        first_listed: Revision(4),\n        history: &[StatusChange { revision: Revision(4), status: Status::Deleted }, StatusChange { revision: Revision(5), status: Status::Current }],\n"
+            ),
+            "{out}"
+        );
+        assert!(
+            out.contains(
+                "        source: CodeList::Recommendation21,\n        first_listed: Revision(4),\n        history: &[StatusChange { revision: Revision(4), status: Status::Current }],\n"
             ),
             "{out}"
         );

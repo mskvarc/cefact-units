@@ -29,7 +29,16 @@ pub enum GenerationError {
         path: PathBuf,
         /// Underlying failure.
         #[source]
-        source: calamine::XlsxError,
+        source: calamine::Error,
+    },
+    /// A row of a source workbook failed to read.
+    #[error("in {path}")]
+    InSource {
+        /// Source workbook.
+        path: PathBuf,
+        /// The row failure.
+        #[source]
+        source: Box<GenerationError>,
     },
     /// A sheet has no header row.
     #[error("sheet {sheet:?} is empty")]
@@ -101,6 +110,18 @@ pub enum GenerationError {
         /// Code that collides with it.
         second: String,
     },
+    /// A revision no longer lists a code an earlier revision listed. The recommendation withdraws a code by marking it
+    /// deleted, never by dropping its row.
+    #[error("revision {revision} no longer lists code {code:?}")]
+    DroppedCode {
+        /// Code dropped.
+        code: String,
+        /// First revision no longer listing it.
+        revision: u16,
+    },
+    /// No Recommendation No. 20 source is configured.
+    #[error("no Recommendation No. 20 source is configured")]
+    NoRecommendation20Source,
     /// An identity registry line is not `<identity>\t<code>` with a numeric identity and a well-formed code.
     #[error("identity registry line {line}: expected `<identity>\\t<code>`, found {text:?}")]
     MalformedRegistryLine {

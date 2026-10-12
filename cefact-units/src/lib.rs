@@ -1,16 +1,21 @@
 //! UN/CEFACT Recommendation No. 20, Codes for Units of Measure Used in International Trade.
 //!
-//! [`UnitCode`] lists every code the recommendation lists, whatever its status: a deprecated or deleted code stays
-//! valid in data written against an earlier revision, and [`UnitCode::status`] says which it is. Every code has a
-//! numeric identity, [`UnitCode::id`], that never changes between releases and fits a signed 16-bit SQL `SMALLINT`.
+//! [`UnitCode`] lists every code any revision of the recommendation lists, whatever its status: a deprecated or
+//! deleted code stays valid in data written against an earlier revision. [`UnitCode::status`] gives the status in the
+//! latest revision and [`UnitCode::status_in`] the status in any revision from 4 on. Every code has a numeric identity,
+//! [`UnitCode::id`], that never changes between releases and fits a signed 16-bit SQL `SMALLINT`.
 //!
-//! The code tables are generated ahead of time from the recommendation's workbook by `cefact-units-generator` and
+//! The package type codes of Recommendation No. 21 are listed too, prefixed with `X` (`XAE`, aerosol), since note 2 of
+//! the introduction to Recommendation No. 20 makes them common codes. [`UnitCode::source`] tells them apart. The note
+//! gives each one the description "A unit of count defining the number of" followed by its name in the plural.
+//!
+//! The code tables are generated ahead of time from the recommendations' workbooks by `cefact-units-generator` and
 //! embedded as constant data. The crate is `no_std`, allocates nothing and does no I/O.
 //!
 //! # Example
 //!
 //! ```rust
-//! use cefact_units::{Status, UnitCode};
+//! use cefact_units::{Revision, Status, UnitCode};
 //!
 //! let kg: UnitCode = "KGM".parse()?;
 //! assert_eq!(kg.info().name, "kilogram");
@@ -19,6 +24,8 @@
 //! assert_eq!(kg.id().get(), 1121);
 //! assert_eq!(UnitCode::from_smallint(kg.id().to_smallint()), Some(kg));
 //! assert_eq!(UnitCode::from_code_ignore_case("kgm"), Some(kg));
+//! assert_eq!(kg.first_listed(), Revision::new(4));
+//! assert_eq!(kg.status_in(Revision::new(9)), Some(Status::Current));
 //! # Ok::<(), cefact_units::UnknownCode>(())
 //! ```
 
@@ -35,14 +42,16 @@ use serde::de;
 
 include!("generated.rs");
 
-/// Status of a code in the latest revision of the recommendation.
+/// Status of a code in a revision of the recommendation.
 ///
-/// A code listed on several rows takes its most current status.
+/// A code listed on several rows of one revision takes its most current status. Revisions up to 7 combine markers
+/// (`D|`, `+D`, `X|`): `X` outranks `D`, which outranks every other marker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "kebab-case"))]
 pub enum Status {
-    /// Listed for use, including codes marked as added (`+`), renamed (`#`), changed (`¦`) or reinstated (`=`).
+    /// Listed for use, including codes marked as added (`+`), renamed (`#`), changed (`¦`, or `|` up to revision 7) or
+    /// reinstated (`=`).
     Current,
     /// Marked `D`: still listed, not to be used in new data.
     Deprecated,
@@ -50,13 +59,21 @@ pub enum Status {
     Deleted,
 }
 
-/// A revision number of Recommendation No. 20.
+/// A revision number of a recommendation: of Recommendation No. 20 for a code's history and [`LATEST_REVISION`], of
+/// its own recommendation for a [`SourceFile`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(transparent))]
 pub struct Revision(u16);
 
 impl Revision {
+    /// Revision `number`.
+    #[inline]
+    #[must_use]
+    pub const fn new(number: u16) -> Revision {
+        Revision(number)
+    }
+
     /// The revision number.
     #[inline]
     #[must_use]
@@ -65,10 +82,34 @@ impl Revision {
     }
 }
 
+/// The UN/CEFACT recommendation a code is drawn from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "kebab-case"))]
+pub enum CodeList {
+    /// Recommendation No. 20, Codes for Units of Measure Used in International Trade.
+    Recommendation20,
+    /// Recommendation No. 21, Codes for Passengers, Types of Cargo, Packages and Packaging Materials: a package type
+    /// code prefixed with `X`.
+    Recommendation21,
+}
+
+/// The status a code takes from one revision of Recommendation No. 20 on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct StatusChange {
+    /// Revision the status starts in.
+    pub revision: Revision,
+    /// Status from that revision on, until the next change.
+    pub status: Status,
+}
+
 /// A source workbook the code tables are generated from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SourceFile {
-    /// Revision of the recommendation the workbook publishes.
+    /// Recommendation the workbook publishes.
+    pub code_list: CodeList,
+    /// Revision of that recommendation.
     pub revision: Revision,
     /// SHA-256 of the workbook file.
     pub sha256: [u8; 32],
@@ -130,6 +171,36 @@ impl UnitCode {
     #[must_use]
     pub const fn status(self) -> Status {
         self.info().status
+    }
+
+    /// Recommendation the code is drawn from.
+    #[inline]
+    #[must_use]
+    pub const fn source(self) -> CodeList {
+        self.info().source
+    }
+
+    /// Earliest revision of Recommendation No. 20 the sources publish that lists the code. The oldest revision
+    /// published as a spreadsheet is 4, so a code first listed in revision 4 may be older.
+    #[inline]
+    #[must_use]
+    pub const fn first_listed(self) -> Revision {
+        self.info().first_listed
+    }
+
+    /// Status of the code in `revision` of Recommendation No. 20, `None` when that revision does not list it or lies
+    /// outside the revisions the sources publish (4 to [`LATEST_REVISION`]).
+    #[must_use]
+    pub fn status_in(self, revision: Revision) -> Option<Status> {
+        if revision > LATEST_REVISION {
+            return None;
+        }
+        self.info()
+            .history
+            .iter()
+            .rev()
+            .find(|change| change.revision <= revision)
+            .map(|change| change.status)
     }
 
     /// The code's identity.
@@ -201,7 +272,7 @@ impl UnitCode {
     }
 }
 
-/// Everything the recommendation records for a [`UnitCode`].
+/// Everything the recommendations record for a [`UnitCode`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct UnitInfo {
@@ -223,6 +294,14 @@ pub struct UnitInfo {
     pub description: Option<&'static str>,
     /// Status of the code in the latest revision.
     pub status: Status,
+    /// Recommendation the code is drawn from.
+    pub source: CodeList,
+    /// Earliest revision of Recommendation No. 20 the sources publish that lists the code.
+    pub first_listed: Revision,
+    /// The status at `first_listed` and at every later revision where it changed, in ascending revision order. The
+    /// last entry holds `status`. A package type code holds the status its list gives it now, from `first_listed` on:
+    /// Recommendation No. 20 refers to that list for its latest codes.
+    pub history: &'static [StatusChange],
 }
 
 impl fmt::Display for UnitCode {
@@ -317,10 +396,13 @@ mod tests {
     extern crate std;
 
     use crate::CODES_BY_TEXT;
+    use crate::CodeList;
     use crate::LATEST_REVISION;
     use crate::RECORDS;
+    use crate::Revision;
     use crate::SOURCES;
     use crate::Status;
+    use crate::StatusChange;
     use crate::UnitCode;
     use crate::UnknownCode;
     use sha2::Digest;
@@ -480,9 +562,144 @@ mod tests {
     }
 
     #[test]
-    fn every_code_of_revision_17_is_listed_whatever_its_status() {
-        // Annexes II and III list every code of Revision 17 exactly once: 2,136 rows.
-        assert_eq!(UnitCode::ALL.len(), 2136);
+    fn every_code_of_every_source_is_listed_whatever_its_status() {
+        // Annexes II and III of Revision 17 list every code of Recommendation No. 20 exactly once, 2,136 rows, and
+        // no earlier revision lists a code Revision 17 lacks. The Recommendation No. 21 list of Revision 11 holds
+        // 406 package type codes.
+        let from = |source: CodeList| {
+            UnitCode::ALL
+                .iter()
+                .filter(|code| code.source() == source)
+                .count()
+        };
+        assert_eq!(from(CodeList::Recommendation20), 2136);
+        assert_eq!(from(CodeList::Recommendation21), 406);
+        assert_eq!(UnitCode::ALL.len(), 2542);
+    }
+
+    #[test]
+    fn every_history_starts_at_the_first_listing_and_ends_at_the_latest_status() {
+        let malformed: Vec<UnitCode> = UnitCode::ALL
+            .iter()
+            .copied()
+            .filter(|code| {
+                let info = code.info();
+                info.history.first().map(|change| change.revision) != Some(info.first_listed)
+                    || info.history.last().map(|change| change.status) != Some(info.status)
+                    || !info.history.windows(2).all(|pair| {
+                        pair[0].revision < pair[1].revision && pair[0].status != pair[1].status
+                    })
+                    || info
+                        .history
+                        .iter()
+                        .any(|change| change.revision > LATEST_REVISION)
+            })
+            .collect();
+        assert_eq!(malformed, []);
+    }
+
+    #[test]
+    fn the_status_in_a_revision_is_the_last_change_up_to_it() {
+        // R4 is deprecated in Revision 4 and deleted from Revision 6 on.
+        let r4 = UnitCode::R4;
+        assert_eq!(
+            r4.info().history,
+            [
+                StatusChange {
+                    revision: Revision::new(4),
+                    status: Status::Deprecated
+                },
+                StatusChange {
+                    revision: Revision::new(6),
+                    status: Status::Deleted
+                },
+            ]
+        );
+        assert_eq!(r4.status_in(Revision::new(4)), Some(Status::Deprecated));
+        assert_eq!(r4.status_in(Revision::new(5)), Some(Status::Deprecated));
+        assert_eq!(r4.status_in(Revision::new(6)), Some(Status::Deleted));
+        assert_eq!(r4.status_in(Revision::new(17)), Some(Status::Deleted));
+    }
+
+    #[test]
+    fn a_reinstated_code_is_deleted_only_before_its_reinstatement() {
+        // HH and NA are marked `X` in Revision 4 and current again from Revisions 5 and 6.
+        assert_eq!(
+            UnitCode::Hh.status_in(Revision::new(4)),
+            Some(Status::Deleted)
+        );
+        assert_eq!(
+            UnitCode::Hh.status_in(Revision::new(5)),
+            Some(Status::Current)
+        );
+        assert_eq!(
+            UnitCode::Na.status_in(Revision::new(5)),
+            Some(Status::Deleted)
+        );
+        assert_eq!(
+            UnitCode::Na.status_in(Revision::new(6)),
+            Some(Status::Current)
+        );
+        assert_eq!(UnitCode::Hh.status(), Status::Current);
+    }
+
+    #[test]
+    fn a_code_has_no_status_before_its_first_listing() {
+        assert_eq!(UnitCode::Mnj.first_listed(), Revision::new(16));
+        assert_eq!(UnitCode::Mnj.status_in(Revision::new(15)), None);
+        assert_eq!(
+            UnitCode::Mnj.status_in(Revision::new(16)),
+            Some(Status::Current)
+        );
+    }
+
+    #[test]
+    fn no_revision_outside_the_sources_gives_a_status() {
+        assert_eq!(UnitCode::Kgm.first_listed(), Revision::new(4));
+        assert_eq!(UnitCode::Kgm.status_in(Revision::new(3)), None);
+        assert_eq!(UnitCode::Kgm.status_in(Revision::new(18)), None);
+        assert_eq!(
+            UnitCode::Kgm.status_in(LATEST_REVISION),
+            Some(Status::Current)
+        );
+    }
+
+    #[test]
+    fn revision_nine_lists_every_package_type_code_and_its_own_codes() {
+        // Revision 9 lists 2,091 codes of its own; its introduction note 2 adds the package type codes.
+        let listed = |source: CodeList| {
+            UnitCode::ALL
+                .iter()
+                .filter(|code| {
+                    code.source() == source && code.status_in(Revision::new(9)).is_some()
+                })
+                .count()
+        };
+        assert_eq!(listed(CodeList::Recommendation20), 2091);
+        assert_eq!(listed(CodeList::Recommendation21), 406);
+    }
+
+    #[test]
+    fn package_type_codes_are_listed_with_an_x_prefix() {
+        let aerosol = UnitCode::from_code("XAE");
+        assert_eq!(aerosol, Some(UnitCode::Xae));
+        let info = UnitCode::Xae.info();
+        assert_eq!(info.name, "Aerosol");
+        assert_eq!(info.source, CodeList::Recommendation21);
+        assert_eq!(info.status, Status::Current);
+        assert_eq!(info.first_listed, Revision::new(4));
+        assert_eq!(UnitCode::Xsx.status(), Status::Deleted);
+        assert_eq!(UnitCode::X1.source(), CodeList::Recommendation20);
+    }
+
+    #[test]
+    fn package_type_codes_take_identities_after_the_recommendation_20_codes() {
+        assert_eq!(UnitCode::X1a.id().get(), 2137);
+        assert_eq!(UnitCode::Xae.id().get(), 2169);
+        let first_package_type = UnitCode::ALL
+            .iter()
+            .position(|code| code.source() == CodeList::Recommendation21);
+        assert_eq!(first_package_type, Some(2136));
     }
 
     #[test]
@@ -561,10 +778,17 @@ mod tests {
     }
 
     #[test]
-    fn the_sources_are_revision_17() {
+    fn the_sources_are_every_recommendation_20_spreadsheet_and_the_latest_package_type_list() {
         assert_eq!(LATEST_REVISION.get(), 17);
-        let revisions: Vec<u16> = SOURCES.iter().map(|source| source.revision.get()).collect();
-        assert_eq!(revisions, [17]);
+        let sources: Vec<(CodeList, u16)> = SOURCES
+            .iter()
+            .map(|source| (source.code_list, source.revision.get()))
+            .collect();
+        let expected: Vec<(CodeList, u16)> = (4..=17)
+            .map(|revision| (CodeList::Recommendation20, revision))
+            .chain([(CodeList::Recommendation21, 11)])
+            .collect();
+        assert_eq!(sources, expected);
     }
 
     #[cfg(feature = "serde")]
@@ -620,6 +844,29 @@ mod tests {
             encoded.as_deref().is_some_and(
                 |encoded| encoded.starts_with("{\"code\":\"KGM\",\"name\":\"kilogram\"")
             ),
+            "{encoded:?}"
+        );
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn serde_writes_a_code_list_in_kebab_case() {
+        assert_eq!(
+            serde_json::to_string(&CodeList::Recommendation21)
+                .ok()
+                .as_deref(),
+            Some("\"recommendation21\"")
+        );
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn serde_writes_unit_info_with_its_lifecycle() {
+        let encoded = serde_json::to_string(&UnitCode::Kgm.info()).ok();
+        assert!(
+            encoded.as_deref().is_some_and(|encoded| encoded.ends_with(
+                "\"status\":\"current\",\"source\":\"recommendation20\",\"first_listed\":4,\"history\":[{\"revision\":4,\"status\":\"current\"}]}"
+            )),
             "{encoded:?}"
         );
     }
