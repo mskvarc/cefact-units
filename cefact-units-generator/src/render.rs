@@ -123,7 +123,6 @@ fn render_records(out: &mut String, units: &[&UnitRecord]) -> Result<(), Generat
             ("quantity", &unit.quantity),
             ("sector", &unit.sector),
             ("conversion_factor", &unit.conversion_factor),
-            ("level_category", &unit.level_category),
             ("description", &unit.description),
         ] {
             writeln!(
@@ -132,6 +131,16 @@ fn render_records(out: &mut String, units: &[&UnitRecord]) -> Result<(), Generat
                 optional_literal(value.as_deref())
             )?;
         }
+        let level_categories: Vec<&str> = unit
+            .level_categories
+            .iter()
+            .map(|entry| entry.library_path())
+            .collect();
+        writeln!(
+            out,
+            "        level_categories: &[{}],",
+            level_categories.join(", ")
+        )?;
         writeln!(out, "        status: {},", unit.status().library_path())?;
         writeln!(out, "        code_list: {},", unit.code_list.library_path())?;
         writeln!(
@@ -272,7 +281,7 @@ mod tests {
             quantity: None,
             sector: None,
             conversion_factor: None,
-            level_category: None,
+            level_categories: Vec::new(),
             description: None,
             code_list: CodeList::Recommendation20,
             lifecycle: Lifecycle::unchanged(StatusChange {

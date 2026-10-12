@@ -130,6 +130,94 @@ pub enum CodeList {
     Recommendation21,
 }
 
+/// One entry of a Recommendation No. 20 code's Level/Category column, the normative relevance of the unit.
+///
+/// The introduction defines three levels: 1, normative (SI units and their standard and commonly used multiples); 2,
+/// normative equivalent (units such as UK and US ones, and their commonly used multiples); 3, informative (units found
+/// only in the informative Annexes II and III). Section VII of the recommendation splits level 1 into `1`, `1S` and
+/// `1M`, level 2 into `2` and `2S`, and level 3 into the categories `3.1` to `3.9`. Serde writes and reads the entry as
+/// it is printed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
+pub enum LevelCategory {
+    /// `1`: normative.
+    #[cfg_attr(feature = "serde", serde(rename = "1"))]
+    Normative,
+    /// `1S`: a standard multiple of a normative unit.
+    #[cfg_attr(feature = "serde", serde(rename = "1S"))]
+    StandardMultiple,
+    /// `1M`: a commonly used multiple of a normative unit.
+    #[cfg_attr(feature = "serde", serde(rename = "1M"))]
+    CommonlyUsedMultiple,
+    /// `2`: normative equivalent.
+    #[cfg_attr(feature = "serde", serde(rename = "2"))]
+    NormativeEquivalent,
+    /// `2S`: a multiple of a normative equivalent unit.
+    #[cfg_attr(feature = "serde", serde(rename = "2S"))]
+    NormativeEquivalentMultiple,
+    /// `3`: informative.
+    #[cfg_attr(feature = "serde", serde(rename = "3"))]
+    Informative,
+    /// `3.1`: a qualified base unit of level 1 or 2.
+    #[cfg_attr(feature = "serde", serde(rename = "3.1"))]
+    QualifiedBaseUnit,
+    /// `3.2`: a sales unit.
+    #[cfg_attr(feature = "serde", serde(rename = "3.2"))]
+    SalesUnit,
+    /// `3.3`: a packing unit.
+    #[cfg_attr(feature = "serde", serde(rename = "3.3"))]
+    PackingUnit,
+    /// `3.4`: a shipping and transportation unit.
+    #[cfg_attr(feature = "serde", serde(rename = "3.4"))]
+    ShippingAndTransportationUnit,
+    /// `3.5`: an industry-specific unit.
+    #[cfg_attr(feature = "serde", serde(rename = "3.5"))]
+    IndustrySpecificUnit,
+    /// `3.6`: an information technology unit.
+    #[cfg_attr(feature = "serde", serde(rename = "3.6"))]
+    InformationTechnologyUnit,
+    /// `3.7`: an integer, number or ratio.
+    #[cfg_attr(feature = "serde", serde(rename = "3.7"))]
+    IntegerNumberOrRatio,
+    /// `3.8`: a multiple, fraction or decimal.
+    #[cfg_attr(feature = "serde", serde(rename = "3.8"))]
+    MultipleFractionOrDecimal,
+    /// `3.9`: miscellaneous.
+    #[cfg_attr(feature = "serde", serde(rename = "3.9"))]
+    Miscellaneous,
+}
+
+impl LevelCategory {
+    /// The entry as the column prints it (`1M`, `3.5`).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            LevelCategory::Normative => "1",
+            LevelCategory::StandardMultiple => "1S",
+            LevelCategory::CommonlyUsedMultiple => "1M",
+            LevelCategory::NormativeEquivalent => "2",
+            LevelCategory::NormativeEquivalentMultiple => "2S",
+            LevelCategory::Informative => "3",
+            LevelCategory::QualifiedBaseUnit => "3.1",
+            LevelCategory::SalesUnit => "3.2",
+            LevelCategory::PackingUnit => "3.3",
+            LevelCategory::ShippingAndTransportationUnit => "3.4",
+            LevelCategory::IndustrySpecificUnit => "3.5",
+            LevelCategory::InformationTechnologyUnit => "3.6",
+            LevelCategory::IntegerNumberOrRatio => "3.7",
+            LevelCategory::MultipleFractionOrDecimal => "3.8",
+            LevelCategory::Miscellaneous => "3.9",
+        }
+    }
+}
+
+impl fmt::Display for LevelCategory {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// The status a code takes from one revision of Recommendation No. 20 on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
@@ -361,10 +449,11 @@ pub struct UnitInfo {
     pub sector: Option<&'static str>,
     /// Informative conversion factor expression.
     pub conversion_factor: Option<&'static str>,
-    /// Normative level or category code.
-    pub level_category: Option<&'static str>,
     /// Human-readable description.
     pub description: Option<&'static str>,
+    /// Every entry of the Level/Category column, in printed order: one for most codes, two where the column lists
+    /// two, none for a Recommendation No. 21 package type code.
+    pub level_categories: &'static [LevelCategory],
     /// Status of the code in the latest revision.
     pub status: Status,
     /// Recommendation the code is drawn from.
@@ -470,6 +559,7 @@ mod tests {
     use crate::CODES_BY_TEXT;
     use crate::CodeList;
     use crate::LATEST_REVISION;
+    use crate::LevelCategory;
     use crate::RECORDS;
     use crate::Revision;
     use crate::SOURCES;
@@ -892,6 +982,49 @@ mod tests {
     }
 
     #[test]
+    fn every_recommendation_20_code_has_a_level_and_no_package_type_code_has_one() {
+        let misplaced: Vec<UnitCode> = UnitCode::ALL
+            .iter()
+            .copied()
+            .filter(|code| {
+                code.info().level_categories.is_empty()
+                    != (code.code_list() == CodeList::Recommendation21)
+            })
+            .collect();
+        assert_eq!(misplaced, []);
+    }
+
+    #[test]
+    fn a_code_lists_every_level_and_category_its_column_prints() {
+        // GT and CNP are the two codes whose column lists two entries, on separate lines.
+        assert_eq!(
+            UnitCode::Kgm.info().level_categories,
+            [LevelCategory::Normative]
+        );
+        assert_eq!(
+            UnitCode::Gt.info().level_categories,
+            [
+                LevelCategory::QualifiedBaseUnit,
+                LevelCategory::ShippingAndTransportationUnit
+            ]
+        );
+        assert_eq!(
+            UnitCode::Cnp.info().level_categories,
+            [
+                LevelCategory::SalesUnit,
+                LevelCategory::MultipleFractionOrDecimal
+            ]
+        );
+    }
+
+    #[test]
+    fn a_level_category_displays_as_the_column_prints_it() {
+        assert_eq!(LevelCategory::CommonlyUsedMultiple.to_string(), "1M");
+        assert_eq!(LevelCategory::IndustrySpecificUnit.as_str(), "3.5");
+        assert_eq!(LevelCategory::Normative.as_str(), "1");
+    }
+
+    #[test]
     fn info_carries_the_workbook_metadata() {
         let info = UnitCode::Kgm.info();
         assert_eq!(info.code, "KGM");
@@ -996,6 +1129,21 @@ mod tests {
 
     #[cfg(feature = "serde")]
     #[test]
+    fn serde_writes_and_reads_a_level_category_as_printed() {
+        assert_eq!(
+            serde_json::to_string(&LevelCategory::CommonlyUsedMultiple)
+                .ok()
+                .as_deref(),
+            Some("\"1M\"")
+        );
+        assert_eq!(
+            serde_json::from_str::<LevelCategory>("\"3.5\"").ok(),
+            Some(LevelCategory::IndustrySpecificUnit)
+        );
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
     fn serde_writes_a_code_list_in_camel_case() {
         assert_eq!(
             serde_json::to_string(&CodeList::Recommendation21)
@@ -1013,7 +1161,7 @@ mod tests {
             encoded
                 .as_deref()
                 .is_some_and(|encoded| encoded.contains("\"conversionFactor\":")
-                    && encoded.contains("\"levelCategory\":")
+                    && encoded.contains("\"levelCategories\":[\"1\"]")
                     && !encoded.contains('_')),
             "{encoded:?}"
         );

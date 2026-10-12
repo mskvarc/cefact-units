@@ -3,6 +3,7 @@
 use crate::annex::Annex;
 use crate::annex::Layout;
 use crate::generation_error::GenerationError;
+use crate::level_category::LevelCategory;
 use crate::marker_erratum::intended_marker;
 use crate::sheet_text::RowPosition;
 use crate::sheet_text::cell_text;
@@ -31,8 +32,8 @@ pub struct WorkbookRow {
     pub sector: Option<String>,
     /// Informative conversion factor.
     pub conversion_factor: Option<String>,
-    /// Level or category.
-    pub level_category: Option<String>,
+    /// Every entry of the Level/Category cell, in printed order.
+    pub level_categories: Vec<LevelCategory>,
     /// Description.
     pub description: Option<String>,
 }
@@ -102,6 +103,16 @@ impl WorkbookRow {
                 marker,
             },
         )?;
+        let level_categories = match text(layout.level_category)? {
+            Some(cell) => {
+                LevelCategory::read_cell(&cell).ok_or(GenerationError::UnknownLevelCategory {
+                    sheet: position.sheet,
+                    row: position.row,
+                    cell,
+                })?
+            }
+            None => Vec::new(),
+        };
         let name = text(layout.name)?.ok_or(GenerationError::MissingCell {
             sheet: position.sheet,
             row: position.row,
@@ -117,7 +128,7 @@ impl WorkbookRow {
             quantity: optional(layout.quantity)?,
             sector: optional(layout.sector)?,
             conversion_factor: text(layout.conversion_factor)?,
-            level_category: text(layout.level_category)?,
+            level_categories,
             description: text(layout.description)?,
         })
     }
@@ -140,6 +151,7 @@ pub fn is_common_code_shape(code: &str) -> bool {
 mod tests {
     use crate::annex::Annex;
     use crate::generation_error::GenerationError;
+    use crate::level_category::LevelCategory;
     use crate::status::Status;
     use crate::workbook_row::WorkbookRow;
     use crate::workbook_row::is_common_code_shape;
@@ -239,6 +251,42 @@ mod tests {
         assert!(
             matches!(error, Err(GenerationError::MalformedCode { row: 2, ref code, .. }) if code == "kgm")
         );
+    }
+
+    #[test]
+    fn the_level_and_category_cell_reads_as_its_entries() {
+        let range = sheet(&[
+            ["", "KGM", "kilogram", "", "1", "kg", "kg"],
+            ["", "GT", "gross ton", "", "3.1\r\n3.4", "", ""],
+            ["", "XX", "no level", "", "", "", ""],
+        ]);
+        let rows = WorkbookRow::read_sheet(17, Annex::TwoAndThree, &range);
+        let levels: Vec<_> = rows
+            .iter()
+            .flatten()
+            .map(|row| row.level_categories.as_slice())
+            .collect();
+        assert_eq!(
+            levels,
+            [
+                &[LevelCategory::Normative][..],
+                &[
+                    LevelCategory::QualifiedBaseUnit,
+                    LevelCategory::ShippingAndTransportationUnit
+                ],
+                &[],
+            ]
+        );
+    }
+
+    #[test]
+    fn an_undefined_level_or_category_fails_naming_the_row_and_cell() {
+        let range = sheet(&[["", "KGM", "kilogram", "", "4", "kg", "kg"]]);
+        let error = WorkbookRow::read_sheet(17, Annex::TwoAndThree, &range);
+        assert!(matches!(
+            error,
+            Err(GenerationError::UnknownLevelCategory { row: 2, ref cell, .. }) if cell == "4"
+        ));
     }
 
     #[test]

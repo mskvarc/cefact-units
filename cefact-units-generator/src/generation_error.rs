@@ -68,6 +68,16 @@ pub enum GenerationError {
         /// Marker found.
         marker: String,
     },
+    /// A row's Level/Category cell holds an entry the recommendation does not define.
+    #[error("sheet {sheet:?} row {row}: unknown level or category {cell:?}")]
+    UnknownLevelCategory {
+        /// Sheet name.
+        sheet: &'static str,
+        /// One-based row number as the workbook shows it.
+        row: u32,
+        /// Cell text found.
+        cell: String,
+    },
     /// A row lacks a cell every row must carry.
     #[error("sheet {sheet:?} row {row}: no {column}")]
     MissingCell {

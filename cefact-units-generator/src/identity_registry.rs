@@ -184,7 +184,7 @@ mod tests {
             quantity: None,
             sector: None,
             conversion_factor: None,
-            level_category: None,
+            level_categories: Vec::new(),
             description: None,
             code_list: CodeList::Recommendation20,
             lifecycle: Lifecycle::unchanged(StatusChange {

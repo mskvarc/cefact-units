@@ -10,6 +10,7 @@ mod code_list;
 mod generated_file;
 mod generation_error;
 mod identity_registry;
+mod level_category;
 mod lifecycle;
 mod marker_erratum;
 mod packaging_row;

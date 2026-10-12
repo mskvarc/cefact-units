@@ -6,6 +6,7 @@
 
 use crate::code_list::CodeList;
 use crate::generation_error::GenerationError;
+use crate::level_category::LevelCategory;
 use crate::lifecycle::Lifecycle;
 use crate::lifecycle::Listing;
 use crate::packaging_row::PackagingRow;
@@ -33,8 +34,8 @@ pub struct UnitRecord {
     pub sector: Option<String>,
     /// Informative conversion factor.
     pub conversion_factor: Option<String>,
-    /// Level or category.
-    pub level_category: Option<String>,
+    /// Every entry of the Level/Category cell.
+    pub level_categories: Vec<LevelCategory>,
     /// Description.
     pub description: Option<String>,
     /// Recommendation the code is drawn from.
@@ -206,8 +207,8 @@ struct ListedUnit {
     sector: Option<String>,
     /// Informative conversion factor.
     conversion_factor: Option<String>,
-    /// Level or category.
-    level_category: Option<String>,
+    /// Every entry of the Level/Category cell.
+    level_categories: Vec<LevelCategory>,
     /// Description.
     description: Option<String>,
     /// Recommendation the code is drawn from.
@@ -226,7 +227,7 @@ impl ListedUnit {
             quantity: None,
             sector: None,
             conversion_factor: None,
-            level_category: None,
+            level_categories: Vec::new(),
             description: row.description,
             code_list: CodeList::Recommendation21,
             lifecycle,
@@ -243,7 +244,7 @@ impl ListedUnit {
             quantity: self.quantity,
             sector: self.sector,
             conversion_factor: self.conversion_factor,
-            level_category: self.level_category,
+            level_categories: self.level_categories,
             description: self.description,
             code_list: self.code_list,
             lifecycle: self.lifecycle,
@@ -266,8 +267,8 @@ struct MergedRow {
     sector: Option<String>,
     /// Conversion factor of the most current row.
     conversion_factor: Option<String>,
-    /// Level or category of the most current row.
-    level_category: Option<String>,
+    /// Every entry of the Level/Category cell of the most current row.
+    level_categories: Vec<LevelCategory>,
     /// Description of the most current row, else the first description among the other rows in rank order.
     description: Option<String>,
     /// Status of the most current row.
@@ -284,7 +285,7 @@ impl MergedRow {
             quantity: self.quantity,
             sector: self.sector,
             conversion_factor: self.conversion_factor,
-            level_category: self.level_category,
+            level_categories: self.level_categories,
             description: self.description,
             code_list: CodeList::Recommendation20,
             lifecycle,
@@ -318,7 +319,7 @@ impl CodeRows {
             quantity: primary.quantity,
             sector: primary.sector,
             conversion_factor: primary.conversion_factor,
-            level_category: primary.level_category,
+            level_categories: primary.level_categories,
             description,
             status: primary.status,
         }
@@ -430,7 +431,7 @@ mod tests {
             quantity: None,
             sector: None,
             conversion_factor: None,
-            level_category: None,
+            level_categories: Vec::new(),
             description: description.map(str::to_owned),
         }
     }
