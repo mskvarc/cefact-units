@@ -284,8 +284,9 @@ impl UnitCode {
     /// The code the bytes `code` spell, case-sensitive.
     #[must_use]
     pub fn from_bytes(code: &[u8]) -> Option<UnitCode> {
-        CODES_BY_TEXT
-            .binary_search_by(|probe| probe.as_str().as_bytes().cmp(code))
+        let key = text_key(code)?;
+        TEXT_KEYS
+            .binary_search(&key)
             .ok()
             .and_then(|found| CODES_BY_TEXT.get(found))
             .copied()
@@ -312,6 +313,34 @@ impl UnitCode {
         self as usize - 1
     }
 }
+
+/// The text of 2 or 3 bytes packed into one integer, `None` for any other length.
+///
+/// The bytes fill the integer from its most significant end and the length takes the least significant byte. No code
+/// holds a zero byte, so keys order like the texts they pack, and a text followed by a zero byte packs to a key of its
+/// own.
+const fn text_key(code: &[u8]) -> Option<u32> {
+    match *code {
+        [first, second] => Some(u32::from_be_bytes([first, second, 0, 2])),
+        [first, second, third] => Some(u32::from_be_bytes([first, second, third, 3])),
+        _ => None,
+    }
+}
+
+/// The key of each code of [`CODES_BY_TEXT`], at the same position, so a lookup searches one contiguous array of
+/// integers.
+static TEXT_KEYS: [u32; UnitCode::ALL.len()] = {
+    let mut keys = [0; UnitCode::ALL.len()];
+    let mut at = 0;
+    while at < keys.len() {
+        // Every code is 2 or 3 characters, so no key stays zero.
+        if let Some(key) = text_key(CODES_BY_TEXT[at].as_str().as_bytes()) {
+            keys[at] = key;
+        }
+        at += 1;
+    }
+    keys
+};
 
 /// Everything the recommendations record for a [`UnitCode`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -444,8 +473,10 @@ mod tests {
     use crate::SOURCES;
     use crate::Status;
     use crate::StatusChange;
+    use crate::TEXT_KEYS;
     use crate::UnitCode;
     use crate::UnknownCode;
+    use crate::text_key;
     use sha2::Digest;
     use sha2::Sha256;
     use std::borrow::ToOwned;
@@ -513,6 +544,19 @@ mod tests {
     fn the_text_table_lists_every_code_once_in_ascending_byte_order() {
         assert!(CODES_BY_TEXT.is_sorted_by(|left, right| left.as_str() < right.as_str()));
         assert_eq!(CODES_BY_TEXT.len(), UnitCode::ALL.len());
+    }
+
+    #[test]
+    fn every_text_key_packs_the_code_at_its_position_in_strictly_ascending_order() {
+        let mismatched: Vec<UnitCode> = CODES_BY_TEXT
+            .iter()
+            .copied()
+            .zip(TEXT_KEYS)
+            .filter(|(code, key)| text_key(code.as_str().as_bytes()) != Some(*key))
+            .map(|(code, _)| code)
+            .collect();
+        assert_eq!(mismatched, []);
+        assert!(TEXT_KEYS.is_sorted_by(|left, right| left < right));
     }
 
     #[test]
