@@ -683,7 +683,7 @@ mod tests {
     }
 
     #[test]
-    fn identities_carried_over_from_the_broker_registry_are_pinned() {
+    fn identities_of_published_releases_are_pinned() {
         for (code, expected) in [
             ("KGM", 1121),
             ("CEL", 367),
