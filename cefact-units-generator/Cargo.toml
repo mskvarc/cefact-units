@@ -1,0 +1,16 @@
+[package]
+name = "cefact-units-generator"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Generates the cefact-units code tables from the UN/CEFACT Recommendation No. 20 sources"
+publish = false
+
+[dependencies]
+calamine = "0.36.1"
+heck = "0.5.0"
+sha2 = "0.11.0"
+thiserror = "2.0.21"
+unicode-normalization = "0.1.25"

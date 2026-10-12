@@ -6,7 +6,9 @@
 
 UN/CEFACT Recommendation No. 20 — Codes for Units of Measure Used in International Trade (Revision 17, 2021).
 
-All data is generated at compile time from `rec20.xlsx` and embedded as `static` data. No runtime allocations, no I/O.
+Every code the recommendation lists is included, whatever its status: a deprecated or deleted code stays valid in data written against an earlier revision, and `UnitInfo::status` says which it is.
+
+The code tables are generated ahead of time from the recommendation's workbook (`sources/`) by `cefact-units-generator` and embedded as constant data. No runtime allocations, no I/O. To regenerate after changing a source, run `cargo run -p cefact-units-generator -- generate`; `-- check` fails when the committed tables are stale.
 
 ## Usage
 
