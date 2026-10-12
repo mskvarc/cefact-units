@@ -203,8 +203,8 @@ impl UnitCode {
     /// Everything the recommendation records for the code.
     #[inline]
     #[must_use]
-    pub const fn info(self) -> UnitInfo {
-        RECORDS[self.position()]
+    pub const fn info(self) -> &'static UnitInfo {
+        &RECORDS[self.position()]
     }
 
     /// Status of the code in the latest revision.
@@ -501,7 +501,7 @@ mod tests {
             .copied()
             .zip(RECORDS)
             .filter(|(code, record)| {
-                code.info() != **record || UnitCode::from_code(record.code) != Some(*code)
+                code.info() != *record || UnitCode::from_code(record.code) != Some(*code)
             })
             .map(|(code, _)| code)
             .collect();
