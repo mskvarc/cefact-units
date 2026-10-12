@@ -531,6 +531,13 @@ mod tests {
     }
 
     #[test]
+    fn codes_order_by_identity_not_by_text() {
+        assert!(UnitCode::ALL.is_sorted());
+        assert!(UnitCode::Zz < UnitCode::Xae);
+        assert!(UnitCode::Xae.as_str() < UnitCode::Zz.as_str());
+    }
+
+    #[test]
     fn the_highest_identity_fits_a_signed_smallint() {
         assert!(i16::try_from(UnitCode::MAX_ID.get()).is_ok());
         assert_eq!(

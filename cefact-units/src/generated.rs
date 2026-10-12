@@ -3,6 +3,10 @@
 /// A UN/CEFACT common code (for example `MTR`, `KGM`), whatever its status.
 ///
 /// Each discriminant is the code's identity, [`UnitCode::id`]: assigned once, never reused, never above `32767`.
+///
+/// `Ord` follows the identity, not the text: `ZZ` sorts before `XAE`, every Recommendation No. 21 code after every
+/// Recommendation No. 20 code, and a code a later release appends after every code listed before it. The order is
+/// the same in every release. Compare [`UnitCode::as_str`] for text order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[non_exhaustive]
 #[repr(u16)]

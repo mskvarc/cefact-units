@@ -49,6 +49,19 @@ fn render_unit_code_enum(
         out,
         "/// Each discriminant is the code's identity, [`UnitCode::id`]: assigned once, never reused, never above `32767`."
     )?;
+    writeln!(out, "///")?;
+    writeln!(
+        out,
+        "/// `Ord` follows the identity, not the text: `ZZ` sorts before `XAE`, every Recommendation No. 21 code after every"
+    )?;
+    writeln!(
+        out,
+        "/// Recommendation No. 20 code, and a code a later release appends after every code listed before it. The order is"
+    )?;
+    writeln!(
+        out,
+        "/// the same in every release. Compare [`UnitCode::as_str`] for text order."
+    )?;
     writeln!(
         out,
         "#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]"
