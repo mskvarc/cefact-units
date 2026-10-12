@@ -11,13 +11,10 @@ use crate::status::Status;
 use calamine::Data;
 use calamine::Range;
 
-/// The sheet listing the package type codes.
-pub const PACKAGE_TYPE_SHEET: &str = "Annex V and VI";
-
-/// Header row of [`PACKAGE_TYPE_SHEET`], whitespace collapsed.
+/// Header row of a package type sheet, whitespace collapsed.
 const HEADERS: &[&str] = &["Status", "Code", "Name", "Description", "Numeric code"];
 
-/// Zero-based offset of the header row in [`PACKAGE_TYPE_SHEET`], below the title and the subtitle.
+/// Zero-based offset of the header row, below the title and the subtitle.
 const HEADER_OFFSET: usize = 2;
 
 /// Status marker column.
@@ -46,29 +43,20 @@ pub struct PackagingRow {
 }
 
 impl PackagingRow {
-    /// Reads every code row of the package type sheet, after checking its header row.
-    pub fn read_sheet(range: &Range<Data>) -> Result<Vec<PackagingRow>, GenerationError> {
+    /// Reads every code row of the package type sheet named `sheet`, after checking its header row.
+    pub fn read_sheet(
+        sheet: &'static str,
+        range: &Range<Data>,
+    ) -> Result<Vec<PackagingRow>, GenerationError> {
         let first_row = range
             .start()
             .map(|(row, _)| row)
-            .ok_or(GenerationError::EmptySheet {
-                sheet: PACKAGE_TYPE_SHEET,
-            })?;
+            .ok_or(GenerationError::EmptySheet { sheet })?;
         let mut rows = range.rows().zip(first_row + 1..).skip(HEADER_OFFSET);
-        let (header, _) = rows.next().ok_or(GenerationError::EmptySheet {
-            sheet: PACKAGE_TYPE_SHEET,
-        })?;
-        check_headers(PACKAGE_TYPE_SHEET, HEADERS, header)?;
-        rows.map(|(cells, row)| {
-            PackagingRow::read(
-                cells,
-                RowPosition {
-                    sheet: PACKAGE_TYPE_SHEET,
-                    row,
-                },
-            )
-        })
-        .collect()
+        let (header, _) = rows.next().ok_or(GenerationError::EmptySheet { sheet })?;
+        check_headers(sheet, HEADERS, header)?;
+        rows.map(|(cells, row)| PackagingRow::read(cells, RowPosition { sheet, row }))
+            .collect()
     }
 
     /// Reads one code row. A row without a code or a name, with an unknown marker or with a code other than 2
@@ -166,7 +154,7 @@ mod tests {
             ],
             ["X", "SX", "Set", "", "11 to 45"],
         ]);
-        let rows = PackagingRow::read_sheet(&range);
+        let rows = PackagingRow::read_sheet("Annex V and VI", &range);
         let read: Vec<_> = rows
             .iter()
             .flatten()
@@ -199,7 +187,7 @@ mod tests {
         let mut range = sheet(&[["", "AE", "Aerosol", "", ""]]);
         range.set_value((2, 1), Data::String("Name".to_owned()));
         assert!(matches!(
-            PackagingRow::read_sheet(&range),
+            PackagingRow::read_sheet("Annex V and VI", &range),
             Err(GenerationError::UnexpectedHeader {
                 sheet: "Annex V and VI",
                 column: 1,
@@ -215,7 +203,7 @@ mod tests {
             let range = sheet(&[["", code, "Aerosol", "", ""]]);
             assert!(
                 matches!(
-                    PackagingRow::read_sheet(&range),
+                    PackagingRow::read_sheet("Annex V and VI", &range),
                     Err(GenerationError::MalformedCode { row: 4, .. })
                 ),
                 "{code:?}"
@@ -227,7 +215,7 @@ mod tests {
     fn an_unknown_marker_fails_naming_the_row() {
         let range = sheet(&[["?", "AE", "Aerosol", "", ""]]);
         assert!(matches!(
-            PackagingRow::read_sheet(&range),
+            PackagingRow::read_sheet("Annex V and VI", &range),
             Err(GenerationError::UnknownStatusMarker { row: 4, ref marker, .. }) if marker == "?"
         ));
     }
@@ -236,7 +224,7 @@ mod tests {
     fn a_row_without_a_name_fails() {
         let range = sheet(&[["", "AE", "", "", ""]]);
         assert!(matches!(
-            PackagingRow::read_sheet(&range),
+            PackagingRow::read_sheet("Annex V and VI", &range),
             Err(GenerationError::MissingCell {
                 row: 4,
                 column: "name",

@@ -110,14 +110,14 @@ pub enum GenerationError {
         /// Code that collides with it.
         second: String,
     },
-    /// A revision no longer lists a code an earlier revision listed. The recommendation withdraws a code by marking it
+    /// A source no longer lists a code an earlier source listed. The recommendations withdraw a code by marking it
     /// deleted, never by dropping its row.
-    #[error("revision {revision} no longer lists code {code:?}")]
+    #[error("{path} no longer lists code {code:?}, which an earlier source lists")]
     DroppedCode {
         /// Code dropped.
         code: String,
-        /// First revision no longer listing it.
-        revision: u16,
+        /// Path of the first source no longer listing it.
+        path: &'static str,
     },
     /// No Recommendation No. 20 source is configured.
     #[error("no Recommendation No. 20 source is configured")]

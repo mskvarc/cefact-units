@@ -20,14 +20,13 @@ mod status;
 mod workbook_row;
 
 use crate::catalogue::Catalogue;
-use crate::code_list::CodeList;
 use crate::generated_file::IDENTITY_REGISTRY;
 use crate::generated_file::RenderedFiles;
 use crate::generation_error::GenerationError;
 use crate::identity_registry::IdentityRegistry;
-use crate::lifecycle::RevisionRows;
 use crate::render::render;
 use crate::source_file::SOURCES;
+use crate::source_file::SourceContent;
 use crate::source_file::SourceFile;
 use std::error::Error;
 use std::path::Path;
@@ -85,18 +84,17 @@ fn render_from_sources(root: &Path) -> Result<RenderedFiles, GenerationError> {
         .iter()
         .map(|spec| SourceFile::read(root, *spec))
         .collect::<Result<_, _>>()?;
-    let mut revisions = Vec::new();
-    let mut packaging = Vec::new();
+    let mut unit_codes = Vec::new();
+    let mut package_types = Vec::new();
     for source in &sources {
-        match source.code_list {
-            CodeList::Recommendation20 => revisions.push(RevisionRows {
-                revision: source.revision,
-                rows: source.rows()?,
-            }),
-            CodeList::Recommendation21 => packaging.extend(source.packaging_rows()?),
+        match source.spec.content {
+            SourceContent::UnitCodes => unit_codes.push(source.rows()?),
+            SourceContent::PackageTypes { sheet, .. } => {
+                package_types.push(source.packaging_rows(sheet)?);
+            }
         }
     }
-    let catalogue = Catalogue::build(revisions, packaging)?;
+    let catalogue = Catalogue::build(unit_codes, package_types)?;
     let registry = IdentityRegistry::parse(&IDENTITY_REGISTRY.read(root)?)?;
     let assignment = registry.assign(&catalogue.units)?;
     Ok(RenderedFiles {

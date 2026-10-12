@@ -159,8 +159,8 @@ fn render_codes_by_text(out: &mut String, units: &[&UnitRecord]) -> Result<(), G
 fn render_sources(out: &mut String, sources: &[SourceFile]) -> Result<(), GenerationError> {
     let latest = sources
         .iter()
-        .filter(|source| source.code_list == CodeList::Recommendation20)
-        .map(|source| source.revision)
+        .filter(|source| source.spec.code_list() == CodeList::Recommendation20)
+        .map(|source| source.spec.revision.major)
         .max()
         .ok_or(GenerationError::NoRecommendation20Source)?;
     writeln!(out)?;
@@ -188,9 +188,18 @@ fn render_sources(out: &mut String, sources: &[SourceFile]) -> Result<(), Genera
         writeln!(
             out,
             "        code_list: {},",
-            source.code_list.library_path()
+            source.spec.code_list().library_path()
         )?;
-        writeln!(out, "        revision: Revision({}),", source.revision)?;
+        writeln!(
+            out,
+            "        revision: SourceRevision {{ major: {}, minor: {} }},",
+            source.spec.revision.major, source.spec.revision.minor
+        )?;
+        writeln!(
+            out,
+            "        listed_from: Revision({}),",
+            source.spec.listed_from()
+        )?;
         writeln!(out, "        sha256: [{}],", digest.join(", "))?;
         writeln!(out, "    }},")?;
     }

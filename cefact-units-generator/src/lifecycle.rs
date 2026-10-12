@@ -1,13 +1,13 @@
-//! The status history of every Recommendation No. 20 code across the revisions the sources publish.
+//! The status history of every code across the revisions of Recommendation No. 20 the sources publish.
 //!
-//! Within one revision a code listed on several rows takes its most current status. Across revisions the history
-//! records the status at the code's first listing and every revision where it changes. Once listed, a code is listed
-//! in every later revision: the recommendation withdraws a code by marking it `X`, never by dropping its row, and a
-//! source that drops one fails generation.
+//! Within one source a code listed on several rows takes its most current status. Across sources the history records
+//! the status at the code's first listing and every Recommendation No. 20 revision where it changes; two sources
+//! listed from the same revision count as one, the later one prevailing. Once listed, a code is listed by every later
+//! source: the recommendations withdraw a code by marking it `X`, never by dropping its row, and a source that drops
+//! one fails generation.
 
 use crate::generation_error::GenerationError;
 use crate::status::Status;
-use crate::workbook_row::WorkbookRow;
 use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
 
@@ -29,13 +29,41 @@ pub struct Lifecycle {
     pub changes: Vec<StatusChange>,
 }
 
-/// The rows one revision publishes.
+/// Every code one source lists, with its most current status among the rows listing it.
 #[derive(Debug)]
-pub struct RevisionRows {
-    /// Revision of Recommendation No. 20.
+pub struct Listing<'r> {
+    /// Path of the source, for error reports.
+    pub source: &'static str,
+    /// Revision of Recommendation No. 20 the source's codes are listed from.
     pub revision: u16,
-    /// Every code row of the revision.
-    pub rows: Vec<WorkbookRow>,
+    /// Status of each code.
+    pub statuses: BTreeMap<&'r str, Status>,
+}
+
+impl<'r> Listing<'r> {
+    /// The listing of `rows`, read by `listing` as code and status, published by `source` and listed from `revision`.
+    pub fn of<R>(
+        source: &'static str,
+        revision: u16,
+        rows: &'r [R],
+        listing: impl Fn(&'r R) -> (&'r str, Status),
+    ) -> Listing<'r> {
+        let statuses = rows.iter().map(listing).fold(
+            BTreeMap::new(),
+            |mut statuses: BTreeMap<&str, Status>, (code, status)| {
+                statuses
+                    .entry(code)
+                    .and_modify(|listed| *listed = (*listed).min(status))
+                    .or_insert(status);
+                statuses
+            },
+        );
+        Listing {
+            source,
+            revision,
+            statuses,
+        }
+    }
 }
 
 impl Lifecycle {
@@ -47,10 +75,30 @@ impl Lifecycle {
         }
     }
 
-    /// Extends the history with the status `change` gives, when it differs from the latest one.
+    /// Extends the history with `change`. A change at the revision of the latest entry replaces that entry's status,
+    /// and an entry left with the status before it is dropped.
     pub fn record(&mut self, change: StatusChange) {
-        if self.latest_status() != change.status {
-            self.changes.push(change);
+        match self.changes.last_mut() {
+            Some(last) if last.revision == change.revision => {
+                last.status = change.status;
+                let before = self
+                    .changes
+                    .iter()
+                    .rev()
+                    .nth(1)
+                    .map_or(self.first_listed.status, |previous| previous.status);
+                if before == change.status {
+                    self.changes.pop();
+                }
+            }
+            None if self.first_listed.revision == change.revision => {
+                self.first_listed.status = change.status;
+            }
+            Some(_) | None => {
+                if self.latest_status() != change.status {
+                    self.changes.push(change);
+                }
+            }
         }
     }
 
@@ -66,30 +114,19 @@ impl Lifecycle {
         std::iter::once(self.first_listed).chain(self.changes.iter().copied())
     }
 
-    /// Traces every code through `revisions`, given in ascending revision order. A code a revision no longer lists
-    /// after an earlier one did fails, naming the code and the revision.
-    pub fn trace(
-        revisions: &[RevisionRows],
-    ) -> Result<BTreeMap<String, Lifecycle>, GenerationError> {
-        revisions.iter().try_fold(
-            BTreeMap::new(),
-            |mut lifecycles: BTreeMap<String, Lifecycle>, revision| {
-                let statuses = statuses_in(&revision.rows);
-                if let Some(dropped) = lifecycles
-                    .keys()
-                    .find(|code| !statuses.contains_key(code.as_str()))
-                {
-                    return Err(GenerationError::DroppedCode {
-                        code: dropped.clone(),
-                        revision: revision.revision,
-                    });
-                }
-                for (code, status) in statuses {
+    /// Traces every code through `listings`, given in ascending revision order. A code a listing no longer holds after
+    /// an earlier one did fails, naming the code and the source.
+    pub fn trace(listings: &[Listing<'_>]) -> Result<BTreeMap<String, Lifecycle>, GenerationError> {
+        listings
+            .iter()
+            .try_fold(BTreeMap::new(), |mut lifecycles, listing| {
+                check_none_dropped(&lifecycles, listing)?;
+                for (code, status) in &listing.statuses {
                     let change = StatusChange {
-                        revision: revision.revision,
-                        status,
+                        revision: listing.revision,
+                        status: *status,
                     };
-                    match lifecycles.entry(code.to_owned()) {
+                    match lifecycles.entry((*code).to_owned()) {
                         Entry::Vacant(first) => {
                             first.insert(Lifecycle::unchanged(change));
                         }
@@ -97,64 +134,75 @@ impl Lifecycle {
                     }
                 }
                 Ok(lifecycles)
-            },
-        )
+            })
+    }
+
+    /// Pairs each of `units`, the merged codes of the latest source `source` listed from `revision`, with its history
+    /// across `earlier` and that source. `listing` reads a unit's code and status.
+    pub fn follow<U>(
+        earlier: &[Listing<'_>],
+        source: &'static str,
+        revision: u16,
+        units: Vec<U>,
+        listing: impl Fn(&U) -> (&str, Status),
+    ) -> Result<Vec<(U, Lifecycle)>, GenerationError> {
+        let mut traced = Lifecycle::trace(earlier)?;
+        check_none_dropped(&traced, &Listing::of(source, revision, &units, &listing))?;
+        Ok(units
+            .into_iter()
+            .map(|unit| {
+                let (code, status) = listing(&unit);
+                let change = StatusChange { revision, status };
+                let lifecycle = match traced.remove(code) {
+                    Some(mut earlier) => {
+                        earlier.record(change);
+                        earlier
+                    }
+                    None => Lifecycle::unchanged(change),
+                };
+                (unit, lifecycle)
+            })
+            .collect())
     }
 }
 
-/// Every code of one revision with its most current status among the rows listing it.
-fn statuses_in(rows: &[WorkbookRow]) -> BTreeMap<&str, Status> {
-    rows.iter().fold(BTreeMap::new(), |mut statuses, row| {
-        statuses
-            .entry(row.code.as_str())
-            .and_modify(|status: &mut Status| *status = (*status).min(row.status))
-            .or_insert(row.status);
-        statuses
-    })
+/// Fails when `listing` no longer holds a code `lifecycles` traced.
+fn check_none_dropped(
+    lifecycles: &BTreeMap<String, Lifecycle>,
+    listing: &Listing<'_>,
+) -> Result<(), GenerationError> {
+    match lifecycles
+        .keys()
+        .find(|code| !listing.statuses.contains_key(code.as_str()))
+    {
+        Some(dropped) => Err(GenerationError::DroppedCode {
+            code: dropped.clone(),
+            path: listing.source,
+        }),
+        None => Ok(()),
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::annex::Annex;
     use crate::generation_error::GenerationError;
     use crate::lifecycle::Lifecycle;
-    use crate::lifecycle::RevisionRows;
+    use crate::lifecycle::Listing;
     use crate::lifecycle::StatusChange;
     use crate::status::Status;
-    use crate::workbook_row::WorkbookRow;
 
-    fn row(code: &str, status: Status) -> WorkbookRow {
-        WorkbookRow {
-            annex: Annex::TwoAndThree,
-            row: 2,
-            status,
-            code: code.to_owned(),
-            name: code.to_owned(),
-            symbol: None,
-            quantity: None,
-            sector: None,
-            conversion_factor: None,
-            level_category: None,
-            description: None,
-        }
-    }
+    const SOURCE: &str = "sources/fixture.xls";
 
-    fn revision(revision: u16, rows: &[(&str, Status)]) -> RevisionRows {
-        RevisionRows {
-            revision,
-            rows: rows
-                .iter()
-                .map(|(code, status)| row(code, *status))
-                .collect(),
-        }
+    fn listing<'r>(revision: u16, rows: &'r [(&'r str, Status)]) -> Listing<'r> {
+        Listing::of(SOURCE, revision, rows, |(code, status)| (*code, *status))
     }
 
     const fn change(revision: u16, status: Status) -> StatusChange {
         StatusChange { revision, status }
     }
 
-    fn history_of(revisions: &[RevisionRows], code: &str) -> Option<Vec<StatusChange>> {
-        Lifecycle::trace(revisions).ok().and_then(|lifecycles| {
+    fn history_of(listings: &[Listing<'_>], code: &str) -> Option<Vec<StatusChange>> {
+        Lifecycle::trace(listings).ok().and_then(|lifecycles| {
             lifecycles
                 .get(code)
                 .map(|lifecycle| lifecycle.history().collect())
@@ -163,37 +211,37 @@ mod tests {
 
     #[test]
     fn a_code_unchanged_since_its_first_listing_has_one_entry() {
-        let revisions = [
-            revision(4, &[("KGM", Status::Current)]),
-            revision(5, &[("KGM", Status::Current)]),
+        let listings = [
+            listing(4, &[("KGM", Status::Current)]),
+            listing(5, &[("KGM", Status::Current)]),
         ];
         assert_eq!(
-            history_of(&revisions, "KGM"),
+            history_of(&listings, "KGM"),
             Some(vec![change(4, Status::Current)])
         );
     }
 
     #[test]
     fn a_code_first_listed_in_a_later_revision_starts_there() {
-        let revisions = [
-            revision(4, &[("KGM", Status::Current)]),
-            revision(5, &[("KGM", Status::Current), ("MNJ", Status::Current)]),
+        let listings = [
+            listing(4, &[("KGM", Status::Current)]),
+            listing(5, &[("KGM", Status::Current), ("MNJ", Status::Current)]),
         ];
         assert_eq!(
-            history_of(&revisions, "MNJ"),
+            history_of(&listings, "MNJ"),
             Some(vec![change(5, Status::Current)])
         );
     }
 
     #[test]
     fn every_status_change_is_recorded_at_its_revision() {
-        let revisions = [
-            revision(4, &[("R4", Status::Deprecated)]),
-            revision(5, &[("R4", Status::Deprecated)]),
-            revision(6, &[("R4", Status::Deleted)]),
+        let listings = [
+            listing(4, &[("R4", Status::Deprecated)]),
+            listing(5, &[("R4", Status::Deprecated)]),
+            listing(6, &[("R4", Status::Deleted)]),
         ];
         assert_eq!(
-            history_of(&revisions, "R4"),
+            history_of(&listings, "R4"),
             Some(vec![
                 change(4, Status::Deprecated),
                 change(6, Status::Deleted)
@@ -203,19 +251,19 @@ mod tests {
 
     #[test]
     fn a_reinstated_code_returns_to_current() {
-        let revisions = [
-            revision(4, &[("HH", Status::Deleted)]),
-            revision(5, &[("HH", Status::Current)]),
+        let listings = [
+            listing(4, &[("HH", Status::Deleted)]),
+            listing(5, &[("HH", Status::Current)]),
         ];
         assert_eq!(
-            history_of(&revisions, "HH"),
+            history_of(&listings, "HH"),
             Some(vec![change(4, Status::Deleted), change(5, Status::Current)])
         );
     }
 
     #[test]
-    fn a_code_on_several_rows_of_a_revision_takes_its_most_current_status() {
-        let revisions = [revision(
+    fn a_code_on_several_rows_of_a_source_takes_its_most_current_status() {
+        let listings = [listing(
             17,
             &[
                 ("A91", Status::Deprecated),
@@ -225,24 +273,98 @@ mod tests {
             ],
         )];
         assert_eq!(
-            history_of(&revisions, "A91"),
+            history_of(&listings, "A91"),
             Some(vec![change(17, Status::Current)])
         );
         assert_eq!(
-            history_of(&revisions, "BB"),
+            history_of(&listings, "BB"),
             Some(vec![change(17, Status::Deprecated)])
         );
     }
 
     #[test]
-    fn a_code_a_later_revision_drops_fails_generation() {
-        let revisions = [
-            revision(4, &[("AA", Status::Current), ("BB", Status::Current)]),
-            revision(5, &[("BB", Status::Current)]),
+    fn of_two_sources_listed_from_one_revision_the_later_prevails() {
+        let listings = [
+            listing(4, &[("AA", Status::Current), ("BB", Status::Current)]),
+            listing(6, &[("AA", Status::Deprecated), ("BB", Status::Deprecated)]),
+            listing(
+                6,
+                &[
+                    ("AA", Status::Deleted),
+                    ("BB", Status::Current),
+                    ("CC", Status::Current),
+                ],
+            ),
+        ];
+        assert_eq!(
+            history_of(&listings, "AA"),
+            Some(vec![change(4, Status::Current), change(6, Status::Deleted)])
+        );
+        assert_eq!(
+            history_of(&listings, "BB"),
+            Some(vec![change(4, Status::Current)])
+        );
+        assert_eq!(
+            history_of(&listings, "CC"),
+            Some(vec![change(6, Status::Current)])
+        );
+    }
+
+    #[test]
+    fn a_later_source_from_the_first_revision_replaces_the_first_status() {
+        let listings = [
+            listing(4, &[("AA", Status::Current)]),
+            listing(4, &[("AA", Status::Deleted)]),
+        ];
+        assert_eq!(
+            history_of(&listings, "AA"),
+            Some(vec![change(4, Status::Deleted)])
+        );
+    }
+
+    #[test]
+    fn a_code_a_later_source_drops_fails_generation() {
+        let listings = [
+            listing(4, &[("AA", Status::Current), ("BB", Status::Current)]),
+            listing(5, &[("BB", Status::Current)]),
         ];
         assert!(matches!(
-            Lifecycle::trace(&revisions),
-            Err(GenerationError::DroppedCode { ref code, revision: 5 }) if code == "AA"
+            Lifecycle::trace(&listings),
+            Err(GenerationError::DroppedCode { ref code, path: SOURCE }) if code == "AA"
+        ));
+    }
+
+    #[test]
+    fn following_pairs_each_latest_unit_with_its_history() {
+        let earlier = [listing(4, &[("AA", Status::Current)])];
+        let latest = vec![("AA", Status::Deprecated), ("BB", Status::Current)];
+        let followed = Lifecycle::follow(&earlier, SOURCE, 9, latest, |(code, status)| {
+            (*code, *status)
+        });
+        let histories: Vec<_> = followed
+            .iter()
+            .flatten()
+            .map(|((code, _), lifecycle)| (*code, lifecycle.history().collect::<Vec<_>>()))
+            .collect();
+        assert_eq!(
+            histories,
+            [
+                (
+                    "AA",
+                    vec![change(4, Status::Current), change(9, Status::Deprecated)]
+                ),
+                ("BB", vec![change(9, Status::Current)]),
+            ]
+        );
+    }
+
+    #[test]
+    fn following_fails_when_the_latest_listing_drops_a_code() {
+        let earlier = [listing(4, &[("AA", Status::Current)])];
+        let latest = vec![("BB", Status::Current)];
+        assert!(matches!(
+            Lifecycle::follow(&earlier, SOURCE, 9, latest, |(code, status)| (*code, *status)),
+            Err(GenerationError::DroppedCode { ref code, .. }) if code == "AA"
         ));
     }
 

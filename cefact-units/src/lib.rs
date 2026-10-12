@@ -6,8 +6,10 @@
 //! [`UnitCode::id`], that never changes between releases and fits a signed 16-bit SQL `SMALLINT`.
 //!
 //! The package type codes of Recommendation No. 21 are listed too, prefixed with `X` (`XAE`, aerosol), since note 2 of
-//! the introduction to Recommendation No. 20 makes them common codes. [`UnitCode::source`] tells them apart. The note
-//! gives each one the description "A unit of count defining the number of" followed by its name in the plural.
+//! the introduction to Recommendation No. 20 makes them common codes. [`UnitCode::source`] tells them apart. Each one
+//! is listed from the first Recommendation No. 20 revision published with or after the Recommendation No. 21 revision
+//! adding it. The note gives each one the description "A unit of count defining the number of" followed by its name in
+//! the plural.
 //!
 //! The code tables are generated ahead of time from the recommendations' workbooks by `cefact-units-generator` and
 //! embedded as constant data. The crate is `no_std`, allocates nothing and does no I/O.
@@ -59,8 +61,7 @@ pub enum Status {
     Deleted,
 }
 
-/// A revision number of a recommendation: of Recommendation No. 20 for a code's history and [`LATEST_REVISION`], of
-/// its own recommendation for a [`SourceFile`].
+/// A revision number of Recommendation No. 20.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(transparent))]
@@ -79,6 +80,41 @@ impl Revision {
     #[must_use]
     pub const fn get(self) -> u16 {
         self.0
+    }
+}
+
+/// A revision number as UNECE prints it on a source workbook: `17`, or `8.1` for the amended Revision 8 of
+/// Recommendation No. 21.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SourceRevision {
+    /// Revision number.
+    major: u16,
+    /// Amendment number, `0` for an unamended revision.
+    minor: u16,
+}
+
+impl SourceRevision {
+    /// The revision number.
+    #[inline]
+    #[must_use]
+    pub const fn major(self) -> u16 {
+        self.major
+    }
+
+    /// The amendment number, `0` for an unamended revision.
+    #[inline]
+    #[must_use]
+    pub const fn minor(self) -> u16 {
+        self.minor
+    }
+}
+
+impl fmt::Display for SourceRevision {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.minor {
+            0 => write!(f, "{}", self.major),
+            minor => write!(f, "{}.{minor}", self.major),
+        }
     }
 }
 
@@ -110,7 +146,10 @@ pub struct SourceFile {
     /// Recommendation the workbook publishes.
     pub code_list: CodeList,
     /// Revision of that recommendation.
-    pub revision: Revision,
+    pub revision: SourceRevision,
+    /// Revision of Recommendation No. 20 the workbook's codes are listed from: its own revision for Recommendation No.
+    /// 20, the first Recommendation No. 20 revision published with or after it for Recommendation No. 21.
+    pub listed_from: Revision,
     /// SHA-256 of the workbook file.
     pub sha256: [u8; 32],
 }
@@ -299,8 +338,7 @@ pub struct UnitInfo {
     /// Earliest revision of Recommendation No. 20 the sources publish that lists the code.
     pub first_listed: Revision,
     /// The status at `first_listed` and at every later revision where it changed, in ascending revision order. The
-    /// last entry holds `status`. A package type code holds the status its list gives it now, from `first_listed` on:
-    /// Recommendation No. 20 refers to that list for its latest codes.
+    /// last entry holds `status`.
     pub history: &'static [StatusChange],
 }
 
@@ -407,6 +445,7 @@ mod tests {
     use crate::UnknownCode;
     use sha2::Digest;
     use sha2::Sha256;
+    use std::borrow::ToOwned;
     use std::format;
     use std::string::String;
     use std::string::ToString;
@@ -564,8 +603,8 @@ mod tests {
     #[test]
     fn every_code_of_every_source_is_listed_whatever_its_status() {
         // Annexes II and III of Revision 17 list every code of Recommendation No. 20 exactly once, 2,136 rows, and
-        // no earlier revision lists a code Revision 17 lacks. The Recommendation No. 21 list of Revision 11 holds
-        // 406 package type codes.
+        // no earlier revision lists a code Revision 17 lacks. Recommendation No. 21 Revision 12 lists 406 package type
+        // codes, and no earlier revision lists one it lacks.
         let from = |source: CodeList| {
             UnitCode::ALL
                 .iter()
@@ -665,8 +704,9 @@ mod tests {
     }
 
     #[test]
-    fn revision_nine_lists_every_package_type_code_and_its_own_codes() {
-        // Revision 9 lists 2,091 codes of its own; its introduction note 2 adds the package type codes.
+    fn revision_nine_lists_its_own_codes_and_the_package_types_of_recommendation_21_revision_9() {
+        // Recommendation No. 20 Revision 9 lists 2,091 codes of its own. Recommendation No. 21 Revision 9, published
+        // with Recommendation No. 20 Revision 8, lists 378 package type codes.
         let listed = |source: CodeList| {
             UnitCode::ALL
                 .iter()
@@ -676,7 +716,7 @@ mod tests {
                 .count()
         };
         assert_eq!(listed(CodeList::Recommendation20), 2091);
-        assert_eq!(listed(CodeList::Recommendation21), 406);
+        assert_eq!(listed(CodeList::Recommendation21), 378);
     }
 
     #[test]
@@ -687,9 +727,37 @@ mod tests {
         assert_eq!(info.name, "Aerosol");
         assert_eq!(info.source, CodeList::Recommendation21);
         assert_eq!(info.status, Status::Current);
-        assert_eq!(info.first_listed, Revision::new(4));
         assert_eq!(UnitCode::Xsx.status(), Status::Deleted);
         assert_eq!(UnitCode::X1.source(), CodeList::Recommendation20);
+    }
+
+    #[test]
+    fn a_package_type_code_is_listed_from_the_recommendation_20_revision_its_list_went_out_with() {
+        // Recommendation No. 21 Revision 5 went out with Recommendation No. 20 Revision 4, Revisions 6 and 7 before
+        // Revision 6, Revisions 8 and 8.1 before Revision 7, and Revisions 10 and 11 before Revision 15.
+        for (code, first_listed) in [
+            (UnitCode::Xae, 4),
+            (UnitCode::Xok, 6),
+            (UnitCode::Xoa, 6),
+            (UnitCode::Xfe, 7),
+            (UnitCode::Xfb, 7),
+            (UnitCode::Xo1, 15),
+            (UnitCode::Xo7, 15),
+        ] {
+            assert_eq!(code.first_listed(), Revision::new(first_listed), "{code}");
+        }
+        assert_eq!(UnitCode::Xo7.status_in(Revision::new(14)), None);
+        assert_eq!(
+            UnitCode::Xo7.status_in(Revision::new(15)),
+            Some(Status::Current)
+        );
+        assert_eq!(
+            UnitCode::Xsx.info().history,
+            [StatusChange {
+                revision: Revision::new(4),
+                status: Status::Deleted
+            }]
+        );
     }
 
     #[test]
@@ -778,15 +846,37 @@ mod tests {
     }
 
     #[test]
-    fn the_sources_are_every_recommendation_20_spreadsheet_and_the_latest_package_type_list() {
+    fn the_sources_are_every_spreadsheet_of_both_recommendations() {
         assert_eq!(LATEST_REVISION.get(), 17);
-        let sources: Vec<(CodeList, u16)> = SOURCES
+        let sources: Vec<(CodeList, String, u16)> = SOURCES
             .iter()
-            .map(|source| (source.code_list, source.revision.get()))
+            .map(|source| {
+                (
+                    source.code_list,
+                    source.revision.to_string(),
+                    source.listed_from.get(),
+                )
+            })
             .collect();
-        let expected: Vec<(CodeList, u16)> = (4..=17)
-            .map(|revision| (CodeList::Recommendation20, revision))
-            .chain([(CodeList::Recommendation21, 11)])
+        let expected: Vec<(CodeList, String, u16)> = (4..=17)
+            .map(|revision| (CodeList::Recommendation20, revision.to_string(), revision))
+            .chain(
+                [
+                    ("5", 4),
+                    ("6", 6),
+                    ("7", 6),
+                    ("8", 7),
+                    ("8.1", 7),
+                    ("9", 8),
+                    ("10", 15),
+                    ("11", 15),
+                    ("12", 17),
+                ]
+                .into_iter()
+                .map(|(revision, listed_from)| {
+                    (CodeList::Recommendation21, revision.to_owned(), listed_from)
+                }),
+            )
             .collect();
         assert_eq!(sources, expected);
     }
