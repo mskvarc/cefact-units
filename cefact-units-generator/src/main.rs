@@ -1,19 +1,24 @@
-//! Generates `cefact-units/src/generated.rs` from the UN/CEFACT Recommendation No. 20 workbook in `sources/`.
+//! Generates `cefact-units/src/generated.rs` from the UN/CEFACT Recommendation No. 20 workbook in `sources/`, and
+//! appends every newly listed code to the identity registry `cefact-units/data/ids.tsv`.
 //!
-//! `generate` writes the file; `check` fails when the committed file differs from what the sources produce. The
-//! published crate carries the generated file, so it has no build-time dependency on the workbook or its reader.
+//! `generate` writes both files; `check` fails when a committed file differs from what the sources produce. The
+//! published crate carries the generated files, so it has no build-time dependency on the workbook or its reader.
 
 mod annex;
 mod catalogue;
 mod generated_file;
 mod generation_error;
+mod identity_registry;
 mod render;
 mod source_file;
 mod status;
 mod workbook_row;
 
 use crate::catalogue::Catalogue;
+use crate::generated_file::IDENTITY_REGISTRY;
+use crate::generated_file::RenderedFiles;
 use crate::generation_error::GenerationError;
+use crate::identity_registry::IdentityRegistry;
 use crate::render::render;
 use crate::source_file::REC20_REVISION_17;
 use crate::source_file::SourceFile;
@@ -62,16 +67,21 @@ fn run() -> Result<(), GenerationError> {
     let root = workspace_root()?;
     let rendered = render_from_sources(root)?;
     match command {
-        Command::Generate => generated_file::write(root, &rendered),
-        Command::Check => generated_file::check(root, &rendered),
+        Command::Generate => rendered.write(root),
+        Command::Check => rendered.check(root),
     }
 }
 
-/// Reads the sources under `root` and renders the generated file.
-fn render_from_sources(root: &Path) -> Result<String, GenerationError> {
+/// Reads the sources and the identity registry under `root` and renders every generated file.
+fn render_from_sources(root: &Path) -> Result<RenderedFiles, GenerationError> {
     let source = SourceFile::read(root, REC20_REVISION_17)?;
     let catalogue = Catalogue::from_rows(source.rows()?)?;
-    render(&catalogue, &source)
+    let registry = IdentityRegistry::parse(&IDENTITY_REGISTRY.read(root)?)?;
+    let assignment = registry.assign(&catalogue.units)?;
+    Ok(RenderedFiles {
+        unit_tables: render(&assignment.units, &source)?,
+        identity_registry: assignment.registry.render(),
+    })
 }
 
 /// The workspace root: the parent of this crate's manifest directory.
@@ -84,11 +94,11 @@ fn workspace_root() -> Result<&'static Path, GenerationError> {
 #[cfg(test)]
 mod tests {
     use crate::Command;
-    use crate::generated_file;
+    use crate::generated_file::UNIT_TABLES;
+    use crate::generated_file::verify_fresh;
     use crate::generation_error::GenerationError;
     use crate::render_from_sources;
     use crate::workspace_root;
-    use std::fs;
 
     fn args(words: &[&str]) -> impl Iterator<Item = String> {
         words
@@ -121,28 +131,21 @@ mod tests {
     }
 
     #[test]
-    fn the_committed_generated_file_is_fresh() {
-        let fresh = workspace_root().and_then(|root| {
-            let rendered = render_from_sources(root)?;
-            generated_file::check(root, &rendered)
-        });
+    fn the_committed_generated_files_are_fresh() {
+        let fresh = workspace_root().and_then(|root| render_from_sources(root)?.check(root));
         assert!(fresh.is_ok(), "{fresh:?}");
     }
 
     #[test]
     fn check_fails_on_a_stale_generated_file() {
         let outcome = workspace_root().and_then(|root| {
-            let path = generated_file::path(root);
-            let committed = fs::read_to_string(&path).map_err(|source| GenerationError::Io {
-                path: path.clone(),
-                source,
-            })?;
+            let committed = UNIT_TABLES.read(root)?;
             let mut stale = committed.as_bytes().to_vec();
             if let Some(last) = stale.last_mut() {
                 *last = if *last == b'\n' { b' ' } else { b'\n' };
             }
             let stale = String::from_utf8_lossy(&stale);
-            generated_file::verify_fresh(&committed, &stale, path)
+            verify_fresh(&committed, &stale, UNIT_TABLES.path(root))
         });
         assert!(
             matches!(outcome, Err(GenerationError::Stale { .. })),

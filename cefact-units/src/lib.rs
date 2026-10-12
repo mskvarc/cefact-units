@@ -308,6 +308,84 @@ impl std::error::Error for UnknownCode {}
 #[cfg(test)]
 mod tests {
     use crate::{LATEST_REVISION, SOURCES, Status, UnitCode, UnitOfMeasure};
+    use sha2::{Digest, Sha256};
+
+    const IDENTITY_REGISTRY: &str = include_str!("../data/ids.tsv");
+    const FROZEN_PREFIXES: &str = include_str!("../data/ids-frozen.txt");
+
+    fn identity(code: UnitCode) -> u16 {
+        code as u16
+    }
+
+    #[test]
+    fn identities_are_dense_from_one_in_all_order() {
+        let out_of_place: Vec<_> = UnitOfMeasure::ALL
+            .iter()
+            .zip(1u16..)
+            .filter(|(unit, expected)| identity(unit.unit_code()) != *expected)
+            .map(|(unit, expected)| (unit.code(), expected))
+            .collect();
+        assert_eq!(out_of_place, []);
+    }
+
+    #[test]
+    fn the_highest_identity_fits_a_signed_smallint() {
+        let highest = UnitOfMeasure::ALL
+            .iter()
+            .map(|unit| identity(unit.unit_code()))
+            .max();
+        assert!(highest.is_some_and(|highest| i16::try_from(highest).is_ok()));
+    }
+
+    #[test]
+    fn identities_carried_over_from_the_broker_registry_are_pinned() {
+        for (code, expected) in [
+            ("KGM", 1121),
+            ("CEL", 367),
+            ("MTR", 1407),
+            ("KMH", 1134),
+            ("A91", 141),
+            ("MNJ", 1393),
+        ] {
+            assert_eq!(
+                UnitCode::from_code(code).map(identity),
+                Some(expected),
+                "{code}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_identity_registry_lists_every_code_in_all_order() {
+        let listed: Vec<String> = UnitOfMeasure::ALL
+            .iter()
+            .map(|unit| format!("{}\t{}", identity(unit.unit_code()), unit.code()))
+            .collect();
+        let registered: Vec<&str> = IDENTITY_REGISTRY.lines().collect();
+        assert_eq!(registered, listed);
+    }
+
+    #[test]
+    fn published_identity_prefixes_are_unchanged() {
+        for record in FROZEN_PREFIXES.lines() {
+            let fields: Vec<&str> = record.split(' ').collect();
+            let [release, count, recorded] = fields[..] else {
+                panic!("malformed frozen prefix record {record:?}");
+            };
+            let count: usize = count.parse().unwrap();
+            let prefix: String = IDENTITY_REGISTRY
+                .split_inclusive('\n')
+                .take(count)
+                .collect();
+            assert_eq!(prefix.lines().count(), count, "release {release}");
+            let recorded: Vec<u8> = (0..recorded.len())
+                .step_by(2)
+                .map(|at| u8::from_str_radix(&recorded[at..at + 2], 16).unwrap())
+                .collect();
+            let digest = Sha256::digest(prefix.as_bytes());
+            assert_eq!(digest.as_slice(), recorded, "release {release}");
+        }
+    }
 
     #[test]
     fn basic_lookup() {

@@ -101,6 +101,40 @@ pub enum GenerationError {
         /// Code that collides with it.
         second: String,
     },
+    /// An identity registry line is not `<identity>\t<code>` with a numeric identity and a well-formed code.
+    #[error("identity registry line {line}: expected `<identity>\\t<code>`, found {text:?}")]
+    MalformedRegistryLine {
+        /// One-based line number.
+        line: usize,
+        /// Line found.
+        text: String,
+    },
+    /// An identity registry line carries an identity other than its line number.
+    #[error("identity registry line {line}: identity {found} is not the line number")]
+    IdentityOutOfSequence {
+        /// One-based line number.
+        line: usize,
+        /// Identity found.
+        found: u16,
+    },
+    /// The identity registry lists a code twice.
+    #[error("identity registry lists code {code:?} twice")]
+    DuplicateRegisteredCode {
+        /// Code registered twice.
+        code: String,
+    },
+    /// The identity registry holds a code no source lists. Codes are never removed from the registry.
+    #[error("identity registry holds code {code:?}, which no source lists")]
+    UnlistedRegisteredCode {
+        /// Registered code.
+        code: String,
+    },
+    /// Registering a code would need an identity past the signed 16-bit `SMALLINT` range.
+    #[error("code {code:?} would take an identity past 32767")]
+    IdentityOverflow {
+        /// Code that does not fit.
+        code: String,
+    },
     /// Writing the generated source text failed.
     #[error("cannot render the generated file")]
     Render(#[from] fmt::Error),

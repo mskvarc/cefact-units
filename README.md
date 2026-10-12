@@ -10,6 +10,8 @@ Every code the recommendation lists is included, whatever its status: a deprecat
 
 The code tables are generated ahead of time from the recommendation's workbook (`sources/`) by `cefact-units-generator` and embedded as constant data. No runtime allocations, no I/O. To regenerate after changing a source, run `cargo run -p cefact-units-generator -- generate`; `-- check` fails when the committed tables are stale.
 
+Every code has a numeric identity, the `#[repr(u16)]` discriminant of its `UnitCode` variant, so `code as u16` reads it. Identities are append-only: a code keeps its identity in every release, an identity is never reused, codes the sources newly list are appended in ascending code order, and no identity exceeds `32767`, so every identity fits a signed 16-bit SQL `SMALLINT`. `UnitOfMeasure::ALL` lists the units in identity order, and `ALL[id - 1]` is the unit whose code has identity `id`. The registry lives in `cefact-units/data/ids.tsv`; `cefact-units/data/ids-frozen.txt` records, for each published release, how many registry lines it covered and their SHA-256, and a test fails if a published prefix ever changes.
+
 ## Usage
 
 ```toml
