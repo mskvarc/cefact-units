@@ -50,7 +50,7 @@ fn main() -> Result<(), UnknownCode> {
 
 ## Features
 
-- `serde`: serialize `UnitCode` as its common code and deserialize it from any string or byte string, borrowed or not; serialize `UnitInfo` and `StatusChange`; serialize and deserialize `Status` and `CodeList` (kebab-case) and `Revision`
+- `serde`: serialize `UnitCode` as its common code and deserialize it from any string or byte string, borrowed or not; serialize `UnitInfo` and `StatusChange` with camelCase keys (`firstListed`, `codeList`); serialize and deserialize `Status` and `CodeList` (camelCase) and `Revision`
 
 ## Minimum Supported Rust Version
 

@@ -50,7 +50,7 @@ include!("generated.rs");
 /// (`D|`, `+D`, `X|`): `X` outranks `D`, which outranks every other marker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(rename_all = "kebab-case"))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub enum Status {
     /// Listed for use, including codes marked as added (`+`), renamed (`#`), changed (`¦`, or `|` up to revision 7) or
     /// reinstated (`=`).
@@ -121,7 +121,7 @@ impl fmt::Display for SourceRevision {
 /// The UN/CEFACT recommendation a code is drawn from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "serde", serde(rename_all = "kebab-case"))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub enum CodeList {
     /// Recommendation No. 20, Codes for Units of Measure Used in International Trade.
     Recommendation20,
@@ -133,6 +133,7 @@ pub enum CodeList {
 /// The status a code takes from one revision of Recommendation No. 20 on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 #[non_exhaustive]
 pub struct StatusChange {
     /// Revision the status starts in.
@@ -345,6 +346,7 @@ static TEXT_KEYS: [u32; UnitCode::ALL.len()] = {
 /// Everything the recommendations record for a [`UnitCode`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 #[non_exhaustive]
 pub struct UnitInfo {
     /// The common code as text (for example `"MTR"`, `"KGM"`).
@@ -973,7 +975,7 @@ mod tests {
 
     #[cfg(feature = "serde")]
     #[test]
-    fn serde_writes_a_status_in_kebab_case() {
+    fn serde_writes_a_status_in_camel_case() {
         assert_eq!(
             serde_json::to_string(&Status::Deprecated).ok().as_deref(),
             Some("\"deprecated\"")
@@ -994,7 +996,7 @@ mod tests {
 
     #[cfg(feature = "serde")]
     #[test]
-    fn serde_writes_a_code_list_in_kebab_case() {
+    fn serde_writes_a_code_list_in_camel_case() {
         assert_eq!(
             serde_json::to_string(&CodeList::Recommendation21)
                 .ok()
@@ -1005,11 +1007,25 @@ mod tests {
 
     #[cfg(feature = "serde")]
     #[test]
+    fn serde_writes_unit_info_keys_in_camel_case() {
+        let encoded = serde_json::to_string(&UnitCode::Kgm.info()).ok();
+        assert!(
+            encoded
+                .as_deref()
+                .is_some_and(|encoded| encoded.contains("\"conversionFactor\":")
+                    && encoded.contains("\"levelCategory\":")
+                    && !encoded.contains('_')),
+            "{encoded:?}"
+        );
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
     fn serde_writes_unit_info_with_its_lifecycle() {
         let encoded = serde_json::to_string(&UnitCode::Kgm.info()).ok();
         assert!(
             encoded.as_deref().is_some_and(|encoded| encoded.ends_with(
-                "\"status\":\"current\",\"code_list\":\"recommendation20\",\"first_listed\":4,\"history\":[{\"revision\":4,\"status\":\"current\"}]}"
+                "\"status\":\"current\",\"codeList\":\"recommendation20\",\"firstListed\":4,\"history\":[{\"revision\":4,\"status\":\"current\"}]}"
             )),
             "{encoded:?}"
         );
