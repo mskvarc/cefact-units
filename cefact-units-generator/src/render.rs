@@ -120,7 +120,7 @@ fn render_records(out: &mut String, units: &[&UnitRecord]) -> Result<(), Generat
             )?;
         }
         writeln!(out, "        status: {},", unit.status().library_path())?;
-        writeln!(out, "        source: {},", unit.source.library_path())?;
+        writeln!(out, "        code_list: {},", unit.code_list.library_path())?;
         writeln!(
             out,
             "        first_listed: Revision({}),",
@@ -261,7 +261,7 @@ mod tests {
             conversion_factor: None,
             level_category: None,
             description: None,
-            source: CodeList::Recommendation20,
+            code_list: CodeList::Recommendation20,
             lifecycle: Lifecycle::unchanged(StatusChange {
                 revision: 4,
                 status,
@@ -328,26 +328,26 @@ mod tests {
     }
 
     #[test]
-    fn a_record_carries_its_source_first_listing_and_history() {
+    fn a_record_carries_its_code_list_first_listing_and_history() {
         let mut reinstated = unit("HH", "hundred cubic metre", Status::Deleted);
         reinstated.lifecycle.record(StatusChange {
             revision: 5,
             status: Status::Current,
         });
         let mut packaging = unit("XAE", "Aerosol", Status::Current);
-        packaging.source = CodeList::Recommendation21;
+        packaging.code_list = CodeList::Recommendation21;
         let records = [&reinstated, &packaging];
         let mut out = String::new();
         assert!(render_records(&mut out, &records).is_ok());
         assert!(
             out.contains(
-                "        status: Status::Current,\n        source: CodeList::Recommendation20,\n        first_listed: Revision(4),\n        history: &[StatusChange { revision: Revision(4), status: Status::Deleted }, StatusChange { revision: Revision(5), status: Status::Current }],\n"
+                "        status: Status::Current,\n        code_list: CodeList::Recommendation20,\n        first_listed: Revision(4),\n        history: &[StatusChange { revision: Revision(4), status: Status::Deleted }, StatusChange { revision: Revision(5), status: Status::Current }],\n"
             ),
             "{out}"
         );
         assert!(
             out.contains(
-                "        source: CodeList::Recommendation21,\n        first_listed: Revision(4),\n        history: &[StatusChange { revision: Revision(4), status: Status::Current }],\n"
+                "        code_list: CodeList::Recommendation21,\n        first_listed: Revision(4),\n        history: &[StatusChange { revision: Revision(4), status: Status::Current }],\n"
             ),
             "{out}"
         );

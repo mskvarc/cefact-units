@@ -38,7 +38,7 @@ pub struct UnitRecord {
     /// Description.
     pub description: Option<String>,
     /// Recommendation the code is drawn from.
-    pub source: CodeList,
+    pub code_list: CodeList,
     /// Status history.
     pub lifecycle: Lifecycle,
 }
@@ -211,7 +211,7 @@ struct ListedUnit {
     /// Description.
     description: Option<String>,
     /// Recommendation the code is drawn from.
-    source: CodeList,
+    code_list: CodeList,
     /// Status history.
     lifecycle: Lifecycle,
 }
@@ -228,7 +228,7 @@ impl ListedUnit {
             conversion_factor: None,
             level_category: None,
             description: row.description,
-            source: CodeList::Recommendation21,
+            code_list: CodeList::Recommendation21,
             lifecycle,
         }
     }
@@ -245,7 +245,7 @@ impl ListedUnit {
             conversion_factor: self.conversion_factor,
             level_category: self.level_category,
             description: self.description,
-            source: self.source,
+            code_list: self.code_list,
             lifecycle: self.lifecycle,
         }
     }
@@ -286,7 +286,7 @@ impl MergedRow {
             conversion_factor: self.conversion_factor,
             level_category: self.level_category,
             description: self.description,
-            source: CodeList::Recommendation20,
+            code_list: CodeList::Recommendation20,
             lifecycle,
         }
     }
@@ -686,7 +686,7 @@ mod tests {
                 (
                     unit.code.as_str(),
                     unit.code_variant.as_str(),
-                    unit.source,
+                    unit.code_list,
                     unit.lifecycle.history().collect::<Vec<_>>(),
                 )
             })
@@ -766,7 +766,7 @@ mod tests {
         let read: Vec<_> = catalogue
             .iter()
             .flat_map(|catalogue| &catalogue.units)
-            .filter(|unit| unit.source == CodeList::Recommendation21)
+            .filter(|unit| unit.code_list == CodeList::Recommendation21)
             .map(|unit| (unit.name.as_str(), unit.status()))
             .collect();
         assert_eq!(

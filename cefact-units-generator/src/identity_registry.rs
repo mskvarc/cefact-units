@@ -186,7 +186,7 @@ mod tests {
             conversion_factor: None,
             level_category: None,
             description: None,
-            source: CodeList::Recommendation20,
+            code_list: CodeList::Recommendation20,
             lifecycle: Lifecycle::unchanged(StatusChange {
                 revision: 17,
                 status: Status::Current,

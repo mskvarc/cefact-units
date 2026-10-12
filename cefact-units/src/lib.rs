@@ -6,7 +6,7 @@
 //! [`UnitCode::id`], that never changes between releases and fits a signed 16-bit SQL `SMALLINT`.
 //!
 //! The package type codes of Recommendation No. 21 are listed too, prefixed with `X` (`XAE`, aerosol), since note 2 of
-//! the introduction to Recommendation No. 20 makes them common codes. [`UnitCode::source`] tells them apart. Each one
+//! the introduction to Recommendation No. 20 makes them common codes. [`UnitCode::code_list`] tells them apart. Each one
 //! is listed from the first Recommendation No. 20 revision published with or after the Recommendation No. 21 revision
 //! adding it. The note gives each one the description "A unit of count defining the number of" followed by its name in
 //! the plural.
@@ -217,8 +217,8 @@ impl UnitCode {
     /// Recommendation the code is drawn from.
     #[inline]
     #[must_use]
-    pub const fn source(self) -> CodeList {
-        self.info().source
+    pub const fn code_list(self) -> CodeList {
+        self.info().code_list
     }
 
     /// Earliest revision of Recommendation No. 20 the sources publish that lists the code. The oldest revision
@@ -337,7 +337,7 @@ pub struct UnitInfo {
     /// Status of the code in the latest revision.
     pub status: Status,
     /// Recommendation the code is drawn from.
-    pub source: CodeList,
+    pub code_list: CodeList,
     /// Earliest revision of Recommendation No. 20 the sources publish that lists the code.
     pub first_listed: Revision,
     /// The status at `first_listed` and at every later revision where it changed, in ascending revision order. The
@@ -608,10 +608,10 @@ mod tests {
         // Annexes II and III of Revision 17 list every code of Recommendation No. 20 exactly once, 2,136 rows, and
         // no earlier revision lists a code Revision 17 lacks. Recommendation No. 21 Revision 12 lists 406 package type
         // codes, and no earlier revision lists one it lacks.
-        let from = |source: CodeList| {
+        let from = |list: CodeList| {
             UnitCode::ALL
                 .iter()
-                .filter(|code| code.source() == source)
+                .filter(|code| code.code_list() == list)
                 .count()
         };
         assert_eq!(from(CodeList::Recommendation20), 2136);
@@ -710,11 +710,11 @@ mod tests {
     fn revision_nine_lists_its_own_codes_and_the_package_types_of_recommendation_21_revision_9() {
         // Recommendation No. 20 Revision 9 lists 2,091 codes of its own. Recommendation No. 21 Revision 9, published
         // with Recommendation No. 20 Revision 8, lists 378 package type codes.
-        let listed = |source: CodeList| {
+        let listed = |list: CodeList| {
             UnitCode::ALL
                 .iter()
                 .filter(|code| {
-                    code.source() == source && code.status_in(Revision::new(9)).is_some()
+                    code.code_list() == list && code.status_in(Revision::new(9)).is_some()
                 })
                 .count()
         };
@@ -728,10 +728,10 @@ mod tests {
         assert_eq!(aerosol, Some(UnitCode::Xae));
         let info = UnitCode::Xae.info();
         assert_eq!(info.name, "Aerosol");
-        assert_eq!(info.source, CodeList::Recommendation21);
+        assert_eq!(info.code_list, CodeList::Recommendation21);
         assert_eq!(info.status, Status::Current);
         assert_eq!(UnitCode::Xsx.status(), Status::Deleted);
-        assert_eq!(UnitCode::X1.source(), CodeList::Recommendation20);
+        assert_eq!(UnitCode::X1.code_list(), CodeList::Recommendation20);
     }
 
     #[test]
@@ -769,7 +769,7 @@ mod tests {
         assert_eq!(UnitCode::Xae.id().get(), 2169);
         let first_package_type = UnitCode::ALL
             .iter()
-            .position(|code| code.source() == CodeList::Recommendation21);
+            .position(|code| code.code_list() == CodeList::Recommendation21);
         assert_eq!(first_package_type, Some(2136));
     }
 
@@ -958,7 +958,7 @@ mod tests {
         let encoded = serde_json::to_string(&UnitCode::Kgm.info()).ok();
         assert!(
             encoded.as_deref().is_some_and(|encoded| encoded.ends_with(
-                "\"status\":\"current\",\"source\":\"recommendation20\",\"first_listed\":4,\"history\":[{\"revision\":4,\"status\":\"current\"}]}"
+                "\"status\":\"current\",\"code_list\":\"recommendation20\",\"first_listed\":4,\"history\":[{\"revision\":4,\"status\":\"current\"}]}"
             )),
             "{encoded:?}"
         );
