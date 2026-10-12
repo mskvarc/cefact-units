@@ -1,31 +1,27 @@
-//! Basic usage of cefact-units.
+//! Looks up a few common codes and lists the first codes by identity.
 
-use cefact_units::{UnitCode, UnitOfMeasure};
+use cefact_units::UnitCode;
+use cefact_units::UnknownCode;
 
-fn main() {
-    // Look up by code
-    let kg = UnitOfMeasure::from_code("KGM").unwrap();
-    println!("Code: {}", kg.code());
-    println!("Name: {}", kg.name());
-    println!("Symbol: {:?}", kg.symbol());
-    println!("Quantity: {:?}", kg.quantity());
-    println!();
+fn main() -> Result<(), UnknownCode> {
+    let kg: UnitCode = "KGM".parse()?;
+    let info = kg.info();
+    println!(
+        "{kg}: {} ({:?}), measures {:?}",
+        info.name, info.symbol, info.quantity
+    );
+    println!("identity {}, status {:?}", kg.id().get(), kg.status());
 
-    // Parse from string
-    let meter: UnitOfMeasure = "MTR".parse().unwrap();
-    println!("{} = {}", meter.code(), meter.name());
-    println!();
+    let litre = UnitCode::from_code_ignore_case("ltr").ok_or(UnknownCode)?;
+    println!("{litre}: {}", litre.info().name);
 
-    // Use strongly-typed UnitCode
-    let code: UnitCode = "LTR".parse().unwrap();
-    let unit = UnitOfMeasure::from_unit_code(code);
-    println!("{} -> {}", code, unit.name());
-    println!();
-
-    // Iterate all units
-    println!("Total units: {}", UnitOfMeasure::ALL.len());
-    println!("\nFirst 10 units:");
-    for unit in UnitOfMeasure::ALL.iter().take(10) {
-        println!("  {} — {}", unit.code(), unit.name());
+    println!(
+        "{} codes, highest identity {}",
+        UnitCode::ALL.len(),
+        UnitCode::MAX_ID.get()
+    );
+    for code in UnitCode::ALL.iter().take(10) {
+        println!("  {:>4} {code}: {}", code.id().get(), code.info().name);
     }
+    Ok(())
 }

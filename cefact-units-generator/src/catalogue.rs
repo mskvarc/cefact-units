@@ -14,8 +14,6 @@ pub struct UnitRecord {
     pub code: String,
     /// `UnitCode` variant name, derived from the code.
     pub code_variant: String,
-    /// `UnitOfMeasure` variant name, derived from the name.
-    pub unit_variant: String,
     /// Unit name.
     pub name: String,
     /// Unit symbol.
@@ -51,30 +49,13 @@ struct CodeRows {
 }
 
 impl Catalogue {
-    /// Merges `rows`, in reading order, into one record per code and names the variants.
-    ///
-    /// `UnitOfMeasure` names are handed out current codes first, then deprecated, then deleted, so a withdrawn code
-    /// never takes the plain name of the current unit it was replaced by (`KTM` and `KMT` are both "kilometre").
+    /// Merges `rows`, in reading order, into one record per code and names each code's variant.
     pub fn from_rows(rows: Vec<WorkbookRow>) -> Result<Catalogue, GenerationError> {
-        let mut ranked: Vec<(usize, MergedRow)> = group_by_code(rows)
+        let mut code_names: HashMap<String, String> = HashMap::new();
+        let units = group_by_code(rows)
             .into_iter()
             .map(CodeRows::merge)
-            .enumerate()
-            .collect();
-        ranked.sort_by_key(|(_, row)| row.status);
-        let mut unit_names: HashMap<String, usize> = HashMap::new();
-        let mut named: Vec<(usize, MergedRow, String)> = ranked
-            .into_iter()
-            .map(|(position, row)| {
-                let unit_variant = unit_variant(&mut unit_names, &row.name, &row.code);
-                (position, row, unit_variant)
-            })
-            .collect();
-        named.sort_by_key(|(position, ..)| *position);
-        let mut code_names: HashMap<String, String> = HashMap::new();
-        let units = named
-            .into_iter()
-            .map(|(_, row, unit_variant)| {
+            .map(|row| {
                 let code_variant = code_variant(&row.code);
                 match code_names.entry(code_variant) {
                     Entry::Occupied(taken) => Err(GenerationError::VariantCollision {
@@ -86,7 +67,7 @@ impl Catalogue {
                         // The map keeps its own copy of the code to name the first holder in a collision report.
                         let code_variant = free.key().clone();
                         free.insert(row.code.clone());
-                        Ok(row.into_record(code_variant, unit_variant))
+                        Ok(row.into_record(code_variant))
                     }
                 }
             })
@@ -119,12 +100,11 @@ struct MergedRow {
 }
 
 impl MergedRow {
-    /// Completes the record with its variant names.
-    fn into_record(self, code_variant: String, unit_variant: String) -> UnitRecord {
+    /// Completes the record with its variant name.
+    fn into_record(self, code_variant: String) -> UnitRecord {
         UnitRecord {
             code: self.code,
             code_variant,
-            unit_variant,
             name: self.name,
             symbol: self.symbol,
             quantity: self.quantity,
@@ -201,34 +181,6 @@ fn code_variant(code: &str) -> String {
         format!("Code{base}")
     } else {
         base
-    }
-}
-
-/// `UnitOfMeasure` variant name: the name in Pascal case, `_<CODE>` when that is empty or starts with a digit, with
-/// the code appended to every later holder of a name already taken.
-fn unit_variant(taken: &mut HashMap<String, usize>, name: &str, code: &str) -> String {
-    let cleaned: String = name
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == ' ' {
-                c
-            } else {
-                ' '
-            }
-        })
-        .collect();
-    let base = cleaned.trim().to_pascal_case();
-    let base = if base.is_empty() || base.starts_with(|c: char| c.is_ascii_digit()) {
-        format!("_{code}")
-    } else {
-        base
-    };
-    let holders = taken.entry(base.clone()).or_insert(0);
-    *holders += 1;
-    if *holders == 1 {
-        base
-    } else {
-        format!("{base}{}", code_variant(code))
     }
 }
 
@@ -382,35 +334,5 @@ mod tests {
             .map(|unit| unit.code_variant.as_str())
             .collect();
         assert_eq!(variants, ["Kgm", "A91", "Code10"]);
-    }
-
-    #[test]
-    fn a_later_unit_with_a_taken_name_gets_its_code_appended() {
-        let mut first = row(Annex::TwoAndThree, 2, "AA", Status::Current, None);
-        first.name = "litre".to_owned();
-        let mut second = row(Annex::TwoAndThree, 3, "BB", Status::Current, None);
-        second.name = "litre".to_owned();
-        let mut numeric = row(Annex::TwoAndThree, 4, "CC", Status::Current, None);
-        numeric.name = "10 kg".to_owned();
-        let merged = units(vec![first, second, numeric]);
-        let variants: Vec<_> = merged
-            .iter()
-            .map(|unit| unit.unit_variant.as_str())
-            .collect();
-        assert_eq!(variants, ["Litre", "LitreBb", "_CC"]);
-    }
-
-    #[test]
-    fn a_withdrawn_unit_never_takes_the_plain_name_of_a_current_one() {
-        let mut deleted = row(Annex::One, 2, "KTM", Status::Deleted, None);
-        deleted.name = "kilometre".to_owned();
-        let mut current = row(Annex::One, 3, "KMT", Status::Current, None);
-        current.name = "kilometre".to_owned();
-        let merged = units(vec![deleted, current]);
-        let variants: Vec<_> = merged
-            .iter()
-            .map(|unit| (unit.code.as_str(), unit.unit_variant.as_str()))
-            .collect();
-        assert_eq!(variants, [("KTM", "KilometreKtm"), ("KMT", "Kilometre")]);
     }
 }

@@ -1,39 +1,39 @@
-//! UN/CEFACT Recommendation No. 20 — Codes for Units of Measure Used in
-//! International Trade (Revision 17, 2021).
+//! UN/CEFACT Recommendation No. 20, Codes for Units of Measure Used in International Trade.
 //!
-//! Every code the recommendation lists is included, whatever its status: a
-//! deprecated or deleted code stays valid in data written against an earlier
-//! revision, and [`UnitInfo::status`] says which it is.
+//! [`UnitCode`] lists every code the recommendation lists, whatever its status: a deprecated or deleted code stays
+//! valid in data written against an earlier revision, and [`UnitCode::status`] says which it is. Every code has a
+//! numeric identity, [`UnitCode::id`], that never changes between releases and fits a signed 16-bit SQL `SMALLINT`.
 //!
-//! The code tables are generated ahead of time from the recommendation's
-//! workbook by `cefact-units-generator` and embedded as constant data. No
-//! runtime allocations, no I/O.
+//! The code tables are generated ahead of time from the recommendation's workbook by `cefact-units-generator` and
+//! embedded as constant data. The crate is `no_std`, allocates nothing and does no I/O.
 //!
 //! # Example
 //!
 //! ```rust
-//! use cefact_units::UnitOfMeasure;
+//! use cefact_units::{Status, UnitCode};
 //!
-//! let kg = UnitOfMeasure::from_code("KGM").unwrap();
-//! assert_eq!(kg.name(), "kilogram");
-//! assert_eq!(kg.symbol(), Some("kg"));
-//! assert_eq!(kg.quantity(), Some("mass"));
-//!
-//! let parsed: UnitOfMeasure = "MTR".parse().unwrap();
-//! assert_eq!(parsed.to_string(), "MTR");
-//!
-//! for unit in UnitOfMeasure::ALL {
-//!     println!("{} — {}", unit.code(), unit.name());
-//! }
+//! let kg: UnitCode = "KGM".parse()?;
+//! assert_eq!(kg.info().name, "kilogram");
+//! assert_eq!(kg.info().symbol, Some("kg"));
+//! assert_eq!(kg.status(), Status::Current);
+//! assert_eq!(kg.id().get(), 1121);
+//! assert_eq!(UnitCode::from_smallint(kg.id().to_smallint()), Some(kg));
+//! assert_eq!(UnitCode::from_code_ignore_case("kgm"), Some(kg));
+//! # Ok::<(), cefact_units::UnknownCode>(())
 //! ```
 
+#![no_std]
 #![forbid(unsafe_code)]
 #![warn(missing_docs, clippy::pedantic)]
-#![allow(clippy::too_many_lines, clippy::match_same_arms)]
+
+use core::error::Error;
+use core::fmt;
+use core::num::NonZeroU16;
+use core::str::FromStr;
+#[cfg(feature = "serde")]
+use serde::de;
 
 include!("generated.rs");
-
-// ── Status, revision and sources ─────────────────────────────────────────────
 
 /// Status of a code in the latest revision of the recommendation.
 ///
@@ -42,8 +42,7 @@ include!("generated.rs");
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "kebab-case"))]
 pub enum Status {
-    /// Listed for use, including codes marked as added (`+`), renamed (`#`),
-    /// changed (`¦`) or reinstated (`=`).
+    /// Listed for use, including codes marked as added (`+`), renamed (`#`), changed (`¦`) or reinstated (`=`).
     Current,
     /// Marked `D`: still listed, not to be used in new data.
     Deprecated,
@@ -75,35 +74,182 @@ pub struct SourceFile {
     pub sha256: [u8; 32],
 }
 
-// ── UnitCode ─────────────────────────────────────────────────────────────────
+/// Numeric identity of a [`UnitCode`], from 1 to 32767.
+///
+/// An identity is assigned once and never reused, so a stored identity names the same code in every later release.
+/// Every identity fits a signed 16-bit SQL `SMALLINT`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct UnitCodeId(NonZeroU16);
 
-impl UnitCode {
-    /// Look up a code by its string representation (case-insensitive).
+impl UnitCodeId {
+    /// The identity as a number.
     #[inline]
-    #[cfg(feature = "case-insensitive")]
     #[must_use]
-    pub fn from_code_ignore_case(code: &str) -> Option<Self> {
-        Self::from_code(&code.to_ascii_uppercase())
+    pub const fn get(self) -> u16 {
+        self.0.get()
+    }
+
+    /// The identity as a signed 16-bit integer, exact since no identity exceeds `32767`.
+    #[inline]
+    #[must_use]
+    pub const fn to_smallint(self) -> i16 {
+        self.0.get().cast_signed()
+    }
+
+    /// The identity a stored `SMALLINT` holds, `None` for zero or a negative value.
+    #[inline]
+    #[must_use]
+    pub const fn from_smallint(value: i16) -> Option<UnitCodeId> {
+        match NonZeroU16::new(value.cast_unsigned()) {
+            Some(identity) if value > 0 => Some(UnitCodeId(identity)),
+            Some(_) | None => None,
+        }
     }
 }
 
-impl core::fmt::Display for UnitCode {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl UnitCode {
+    /// The highest identity this release assigns, held by the last code of [`UnitCode::ALL`].
+    pub const MAX_ID: UnitCodeId = Self::ALL[Self::ALL.len() - 1].id();
+
+    /// The common code as text.
+    #[inline]
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        self.info().code
+    }
+
+    /// Everything the recommendation records for the code.
+    #[inline]
+    #[must_use]
+    pub const fn info(self) -> UnitInfo {
+        RECORDS[self.position()]
+    }
+
+    /// Status of the code in the latest revision.
+    #[inline]
+    #[must_use]
+    pub const fn status(self) -> Status {
+        self.info().status
+    }
+
+    /// The code's identity.
+    #[inline]
+    #[must_use]
+    pub const fn id(self) -> UnitCodeId {
+        // Every discriminant is at least 1, so the minimum plus the discriminant less one is the discriminant itself.
+        UnitCodeId(NonZeroU16::MIN.saturating_add((self as u16).saturating_sub(1)))
+    }
+
+    /// The code with identity `id`, `None` when a newer release assigned it.
+    #[inline]
+    #[must_use]
+    pub const fn from_id(id: UnitCodeId) -> Option<UnitCode> {
+        let position = (id.get() - 1) as usize;
+        if position < Self::ALL.len() {
+            Some(Self::ALL[position])
+        } else {
+            None
+        }
+    }
+
+    /// The code a stored `SMALLINT` names, `None` for zero, a negative value or an identity a newer release assigned.
+    #[inline]
+    #[must_use]
+    pub const fn from_smallint(value: i16) -> Option<UnitCode> {
+        match UnitCodeId::from_smallint(value) {
+            Some(id) => Self::from_id(id),
+            None => None,
+        }
+    }
+
+    /// The code `code` spells, case-sensitive.
+    #[inline]
+    #[must_use]
+    pub fn from_code(code: &str) -> Option<UnitCode> {
+        Self::from_bytes(code.as_bytes())
+    }
+
+    /// The code the bytes `code` spell, case-sensitive.
+    #[must_use]
+    pub fn from_bytes(code: &[u8]) -> Option<UnitCode> {
+        CODES_BY_TEXT
+            .binary_search_by(|probe| probe.as_str().as_bytes().cmp(code))
+            .ok()
+            .and_then(|found| CODES_BY_TEXT.get(found))
+            .copied()
+    }
+
+    /// The code `code` spells with ASCII letters folded to upper case. Every other character must match exactly.
+    #[must_use]
+    pub fn from_code_ignore_case(code: &str) -> Option<UnitCode> {
+        match *code.as_bytes() {
+            [first, second] => {
+                Self::from_bytes(&[first.to_ascii_uppercase(), second.to_ascii_uppercase()])
+            }
+            [first, second, third] => Self::from_bytes(&[
+                first.to_ascii_uppercase(),
+                second.to_ascii_uppercase(),
+                third.to_ascii_uppercase(),
+            ]),
+            _ => None,
+        }
+    }
+
+    /// Position of the code in the tables written in identity order.
+    const fn position(self) -> usize {
+        self as usize - 1
+    }
+}
+
+/// Everything the recommendation records for a [`UnitCode`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct UnitInfo {
+    /// The common code as text (for example `"MTR"`, `"KGM"`).
+    pub code: &'static str,
+    /// English unit name.
+    pub name: &'static str,
+    /// Unit symbol (for example `m`, `kg`), if the recommendation defines one.
+    pub symbol: Option<&'static str>,
+    /// Physical quantity the unit measures (Annex I only).
+    pub quantity: Option<&'static str>,
+    /// Sector or scientific discipline (Annex I only).
+    pub sector: Option<&'static str>,
+    /// Informative conversion factor expression.
+    pub conversion_factor: Option<&'static str>,
+    /// Normative level or category code.
+    pub level_category: Option<&'static str>,
+    /// Human-readable description.
+    pub description: Option<&'static str>,
+    /// Status of the code in the latest revision.
+    pub status: Status,
+}
+
+impl fmt::Display for UnitCode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
 }
 
-impl core::str::FromStr for UnitCode {
+impl FromStr for UnitCode {
     type Err = UnknownCode;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        #[cfg(feature = "case-insensitive")]
-        let result = Self::from_code_ignore_case(s);
+        Self::from_code(s).ok_or(UnknownCode)
+    }
+}
 
-        #[cfg(not(feature = "case-insensitive"))]
-        let result = Self::from_code(s);
+impl TryFrom<&str> for UnitCode {
+    type Error = UnknownCode;
 
-        result.ok_or_else(|| UnknownCode(s.to_owned()))
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        s.parse()
+    }
+}
+
+impl AsRef<str> for UnitCode {
+    fn as_ref(&self) -> &str {
+        self.as_str()
     }
 }
 
@@ -117,224 +263,156 @@ impl serde::Serialize for UnitCode {
     }
 }
 
+/// Reads a common code from a string or a byte string, borrowed or transient.
+#[cfg(feature = "serde")]
+struct UnitCodeVisitor;
+
+#[cfg(feature = "serde")]
+impl de::Visitor<'_> for UnitCodeVisitor {
+    type Value = UnitCode;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a UN/CEFACT common code")
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<UnitCode, E>
+    where
+        E: de::Error,
+    {
+        UnitCode::from_code(value).ok_or_else(|| E::custom(UnknownCode))
+    }
+
+    fn visit_bytes<E>(self, value: &[u8]) -> Result<UnitCode, E>
+    where
+        E: de::Error,
+    {
+        UnitCode::from_bytes(value).ok_or_else(|| E::custom(UnknownCode))
+    }
+}
+
 #[cfg(feature = "serde")]
 impl<'de> serde::Deserialize<'de> for UnitCode {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
-        let code = <&str>::deserialize(deserializer)?;
-        code.parse().map_err(serde::de::Error::custom)
+        deserializer.deserialize_str(UnitCodeVisitor)
     }
 }
 
-impl<'a> TryFrom<&'a str> for UnitCode {
-    type Error = UnknownCode;
+/// A text that spells no common code this release lists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct UnknownCode;
 
-    fn try_from(s: &'a str) -> Result<Self, Self::Error> {
-        s.parse()
+impl fmt::Display for UnknownCode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("unknown UN/CEFACT common code")
     }
 }
 
-// ── UnitOfMeasure ────────────────────────────────────────────────────────────
-
-/// All metadata for a [`UnitOfMeasure`] variant.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct UnitInfo {
-    /// 2- or 3-character alphanumeric common code (e.g. `"MTR"`, `"KGM"`).
-    pub code: &'static str,
-    /// English unit name.
-    pub name: &'static str,
-    /// Unit symbol (e.g. `m`, `kg`), if defined.
-    pub symbol: Option<&'static str>,
-    /// Physical quantity this unit measures (Annex I only).
-    pub quantity: Option<&'static str>,
-    /// Sector / scientific discipline (Annex I only).
-    pub sector: Option<&'static str>,
-    /// Informative conversion factor expression.
-    pub conversion_factor: Option<&'static str>,
-    /// Normative level/category code from the recommendation.
-    pub level_category: Option<&'static str>,
-    /// Human-readable description.
-    pub description: Option<&'static str>,
-    /// Status of the code in the latest revision.
-    pub status: Status,
-}
-
-impl UnitOfMeasure {
-    /// 2- or 3-character common code.
-    #[inline]
-    #[must_use]
-    pub const fn code(self) -> &'static str {
-        self.info().code
-    }
-
-    /// English unit name.
-    #[inline]
-    #[must_use]
-    pub const fn name(self) -> &'static str {
-        self.info().name
-    }
-
-    /// Unit symbol, if any.
-    #[inline]
-    #[must_use]
-    pub const fn symbol(self) -> Option<&'static str> {
-        self.info().symbol
-    }
-
-    /// Physical quantity (Annex I only).
-    #[inline]
-    #[must_use]
-    pub const fn quantity(self) -> Option<&'static str> {
-        self.info().quantity
-    }
-
-    /// Sector / discipline (Annex I only).
-    #[inline]
-    #[must_use]
-    pub const fn sector(self) -> Option<&'static str> {
-        self.info().sector
-    }
-
-    /// Informative conversion factor expression.
-    #[inline]
-    #[must_use]
-    pub const fn conversion_factor(self) -> Option<&'static str> {
-        self.info().conversion_factor
-    }
-
-    /// Normative level/category code.
-    #[inline]
-    #[must_use]
-    pub const fn level_category(self) -> Option<&'static str> {
-        self.info().level_category
-    }
-
-    /// Description text.
-    #[inline]
-    #[must_use]
-    pub const fn description(self) -> Option<&'static str> {
-        self.info().description
-    }
-
-    /// Status of the code in the latest revision.
-    #[inline]
-    #[must_use]
-    pub const fn status(self) -> Status {
-        self.info().status
-    }
-
-    /// Look up a unit by its common code (case-sensitive).
-    #[inline]
-    #[must_use]
-    pub fn from_code(code: &str) -> Option<Self> {
-        UnitCode::from_code(code).map(Self::from_unit_code)
-    }
-
-    /// Look up a unit by its common code (case-insensitive).
-    #[inline]
-    #[cfg(feature = "case-insensitive")]
-    #[must_use]
-    pub fn from_code_ignore_case(code: &str) -> Option<Self> {
-        UnitCode::from_code_ignore_case(code).map(Self::from_unit_code)
-    }
-}
-
-impl core::fmt::Display for UnitOfMeasure {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str(self.code())
-    }
-}
-
-impl core::str::FromStr for UnitOfMeasure {
-    type Err = UnknownCode;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        #[cfg(feature = "case-insensitive")]
-        let result = Self::from_code_ignore_case(s);
-
-        #[cfg(not(feature = "case-insensitive"))]
-        let result = Self::from_code(s);
-
-        result.ok_or_else(|| UnknownCode(s.to_owned()))
-    }
-}
-
-#[cfg(feature = "serde")]
-impl serde::Serialize for UnitOfMeasure {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_str(self.code())
-    }
-}
-
-#[cfg(feature = "serde")]
-impl<'de> serde::Deserialize<'de> for UnitOfMeasure {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let code = <&str>::deserialize(deserializer)?;
-        code.parse().map_err(serde::de::Error::custom)
-    }
-}
-
-impl<'a> TryFrom<&'a str> for UnitOfMeasure {
-    type Error = UnknownCode;
-
-    fn try_from(s: &'a str) -> Result<Self, Self::Error> {
-        s.parse()
-    }
-}
-
-// ── UnknownCode error ────────────────────────────────────────────────────────
-
-/// Error returned when parsing an unrecognised UN/CEFACT common code.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UnknownCode(pub String);
-
-impl core::fmt::Display for UnknownCode {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "unknown UN/CEFACT unit code: {:?}", self.0)
-    }
-}
-
-impl std::error::Error for UnknownCode {}
+impl Error for UnknownCode {}
 
 #[cfg(test)]
 mod tests {
-    use crate::{LATEST_REVISION, SOURCES, Status, UnitCode, UnitOfMeasure};
-    use sha2::{Digest, Sha256};
+    extern crate std;
+
+    use crate::CODES_BY_TEXT;
+    use crate::LATEST_REVISION;
+    use crate::RECORDS;
+    use crate::SOURCES;
+    use crate::Status;
+    use crate::UnitCode;
+    use crate::UnknownCode;
+    use sha2::Digest;
+    use sha2::Sha256;
+    use std::format;
+    use std::string::String;
+    use std::string::ToString;
+    use std::vec::Vec;
 
     const IDENTITY_REGISTRY: &str = include_str!("../data/ids.tsv");
     const FROZEN_PREFIXES: &str = include_str!("../data/ids-frozen.txt");
 
-    fn identity(code: UnitCode) -> u16 {
-        code as u16
+    fn status_of(code: &str) -> Option<Status> {
+        UnitCode::from_code(code).map(UnitCode::status)
+    }
+
+    #[test]
+    fn every_code_round_trips_through_its_text() {
+        let lost: Vec<UnitCode> = UnitCode::ALL
+            .iter()
+            .copied()
+            .filter(|code| UnitCode::from_code(code.as_str()) != Some(*code))
+            .collect();
+        assert_eq!(lost, []);
+    }
+
+    #[test]
+    fn every_code_round_trips_through_its_bytes() {
+        let lost: Vec<UnitCode> = UnitCode::ALL
+            .iter()
+            .copied()
+            .filter(|code| UnitCode::from_bytes(code.as_str().as_bytes()) != Some(*code))
+            .collect();
+        assert_eq!(lost, []);
+    }
+
+    #[test]
+    fn every_code_round_trips_through_its_identity() {
+        let lost: Vec<UnitCode> = UnitCode::ALL
+            .iter()
+            .copied()
+            .filter(|code| {
+                UnitCode::from_id(code.id()) != Some(*code)
+                    || UnitCode::from_smallint(code.id().to_smallint()) != Some(*code)
+            })
+            .collect();
+        assert_eq!(lost, []);
+    }
+
+    #[test]
+    fn every_record_belongs_to_the_code_at_its_position() {
+        let misplaced: Vec<UnitCode> = UnitCode::ALL
+            .iter()
+            .copied()
+            .zip(RECORDS)
+            .filter(|(code, record)| {
+                code.info() != **record || UnitCode::from_code(record.code) != Some(*code)
+            })
+            .map(|(code, _)| code)
+            .collect();
+        assert_eq!(misplaced, []);
+        assert_eq!(RECORDS.len(), UnitCode::ALL.len());
+    }
+
+    #[test]
+    fn the_text_table_lists_every_code_once_in_ascending_byte_order() {
+        assert!(CODES_BY_TEXT.is_sorted_by(|left, right| left.as_str() < right.as_str()));
+        assert_eq!(CODES_BY_TEXT.len(), UnitCode::ALL.len());
     }
 
     #[test]
     fn identities_are_dense_from_one_in_all_order() {
-        let out_of_place: Vec<_> = UnitOfMeasure::ALL
+        let out_of_place: Vec<(UnitCode, u16)> = UnitCode::ALL
             .iter()
+            .copied()
             .zip(1u16..)
-            .filter(|(unit, expected)| identity(unit.unit_code()) != *expected)
-            .map(|(unit, expected)| (unit.code(), expected))
+            .filter(|(code, expected)| code.id().get() != *expected)
             .collect();
         assert_eq!(out_of_place, []);
+        assert_eq!(
+            UnitCode::ALL.last().map(|code| code.id()),
+            Some(UnitCode::MAX_ID)
+        );
     }
 
     #[test]
     fn the_highest_identity_fits_a_signed_smallint() {
-        let highest = UnitOfMeasure::ALL
-            .iter()
-            .map(|unit| identity(unit.unit_code()))
-            .max();
-        assert!(highest.is_some_and(|highest| i16::try_from(highest).is_ok()));
+        assert!(i16::try_from(UnitCode::MAX_ID.get()).is_ok());
+        assert_eq!(
+            i32::from(UnitCode::MAX_ID.to_smallint()),
+            i32::from(UnitCode::MAX_ID.get())
+        );
     }
 
     #[test]
@@ -348,7 +426,7 @@ mod tests {
             ("MNJ", 1393),
         ] {
             assert_eq!(
-                UnitCode::from_code(code).map(identity),
+                UnitCode::from_code(code).map(|code| code.id().get()),
                 Some(expected),
                 "{code}"
             );
@@ -356,10 +434,24 @@ mod tests {
     }
 
     #[test]
+    fn a_non_positive_or_unassigned_smallint_names_no_code() {
+        let mut refused = Vec::from([0, -1, i16::MIN]);
+        if let Ok(unassigned) = i16::try_from(UnitCode::MAX_ID.get() + 1) {
+            refused.push(unassigned);
+        }
+        let named: Vec<(i16, Option<UnitCode>)> = refused
+            .into_iter()
+            .map(|value| (value, UnitCode::from_smallint(value)))
+            .filter(|(_, code)| code.is_some())
+            .collect();
+        assert_eq!(named, []);
+    }
+
+    #[test]
     fn the_identity_registry_lists_every_code_in_all_order() {
-        let listed: Vec<String> = UnitOfMeasure::ALL
+        let listed: Vec<String> = UnitCode::ALL
             .iter()
-            .map(|unit| format!("{}\t{}", identity(unit.unit_code()), unit.code()))
+            .map(|code| format!("{}\t{}", code.id().get(), code))
             .collect();
         let registered: Vec<&str> = IDENTITY_REGISTRY.lines().collect();
         assert_eq!(registered, listed);
@@ -388,129 +480,147 @@ mod tests {
     }
 
     #[test]
-    fn basic_lookup() {
-        let kg = UnitOfMeasure::from_code("KGM").unwrap();
-        assert_eq!(kg.name(), "kilogram");
-        assert_eq!(kg.symbol(), Some("kg"));
-    }
-
-    #[test]
-    fn from_str_parses() {
-        let parsed: UnitOfMeasure = "MTR".parse().unwrap();
-        assert_eq!(parsed.code(), "MTR");
-    }
-
-    #[test]
-    fn unknown_code_fails() {
-        assert!(UnitOfMeasure::from_code("INVALID").is_none());
-        assert!("INVALID".parse::<UnitOfMeasure>().is_err());
-    }
-
-    #[test]
-    fn unit_code_roundtrip() {
-        let code: UnitCode = "KGM".parse().unwrap();
-        assert_eq!(code.as_str(), "KGM");
-        let unit = UnitOfMeasure::from_unit_code(code);
-        assert_eq!(unit.unit_code(), code);
-    }
-
-    #[test]
     fn every_code_of_revision_17_is_listed_whatever_its_status() {
-        // Annex II and III list every code of Revision 17 exactly once: 2,136 rows.
-        assert_eq!(UnitOfMeasure::ALL.len(), 2136);
+        // Annexes II and III list every code of Revision 17 exactly once: 2,136 rows.
+        assert_eq!(UnitCode::ALL.len(), 2136);
     }
 
     #[test]
     fn a_deprecated_code_is_listed_as_deprecated() {
-        let unit = UnitOfMeasure::from_code("A1").unwrap();
-        assert_eq!(unit.status(), Status::Deprecated);
+        assert_eq!(status_of("A1"), Some(Status::Deprecated));
     }
 
     #[test]
     fn a_deleted_code_is_listed_as_deleted() {
-        let unit = UnitOfMeasure::from_code("KTM").unwrap();
-        assert_eq!(unit.status(), Status::Deleted);
+        assert_eq!(status_of("KTM"), Some(Status::Deleted));
     }
 
     #[test]
     fn a_code_with_any_current_row_is_current() {
         // A91 has a current and a deprecated row in Annex I.
-        let unit = UnitOfMeasure::from_code("A91").unwrap();
-        assert_eq!(unit.status(), Status::Current);
+        assert_eq!(status_of("A91"), Some(Status::Current));
     }
 
     #[test]
     fn a_changed_entry_is_current() {
         // MNJ is current in Annex I and marked `¦` in Annex II.
-        let unit = UnitOfMeasure::from_code("MNJ").unwrap();
-        assert_eq!(unit.status(), Status::Current);
+        assert_eq!(status_of("MNJ"), Some(Status::Current));
     }
 
     #[test]
-    fn a_current_code_keeps_its_annex_one_metadata() {
-        let unit = UnitOfMeasure::from_code("KGM").unwrap();
-        assert_eq!(unit.quantity(), Some("mass"));
-        assert_eq!(unit.status(), Status::Current);
+    fn lookup_refuses_every_malformed_shape() {
+        for code in ["", "K", "KGMX", "kgm", "K M", "KG\u{39C}"] {
+            assert_eq!(UnitCode::from_code(code), None, "{code:?}");
+        }
+    }
+
+    #[test]
+    fn a_three_byte_text_led_by_a_zero_byte_names_no_two_character_code() {
+        assert!(UnitCode::from_code("A1").is_some());
+        assert_eq!(UnitCode::from_bytes(b"\0A1"), None);
+        assert_eq!(UnitCode::from_bytes(b"A1\0"), None);
+    }
+
+    #[test]
+    fn case_folded_lookup_folds_ascii_only() {
+        assert_eq!(UnitCode::from_code_ignore_case("kgm"), Some(UnitCode::Kgm));
+        assert_eq!(UnitCode::from_code_ignore_case("Kgm"), Some(UnitCode::Kgm));
+        assert_eq!(
+            UnitCode::from_code_ignore_case("a1"),
+            UnitCode::from_code("A1")
+        );
+        assert_eq!(UnitCode::from_code_ignore_case("\u{FF4B}gm"), None);
+    }
+
+    #[test]
+    fn from_str_is_case_sensitive() {
+        assert_eq!("kgm".parse::<UnitCode>(), Err(UnknownCode));
+        assert_eq!("KGM".parse::<UnitCode>(), Ok(UnitCode::Kgm));
+        assert_eq!(UnitCode::try_from("kgm"), Err(UnknownCode));
+    }
+
+    #[test]
+    fn display_and_as_ref_write_the_common_code() {
+        assert_eq!(UnitCode::Kgm.to_string(), "KGM");
+        assert_eq!(AsRef::<str>::as_ref(&UnitCode::Kgm), "KGM");
+    }
+
+    #[test]
+    fn an_unknown_code_names_the_vocabulary_it_is_missing_from() {
+        assert_eq!(UnknownCode.to_string(), "unknown UN/CEFACT common code");
+    }
+
+    #[test]
+    fn info_carries_the_workbook_metadata() {
+        let info = UnitCode::Kgm.info();
+        assert_eq!(info.code, "KGM");
+        assert_eq!(info.name, "kilogram");
+        assert_eq!(info.symbol, Some("kg"));
+        assert_eq!(info.quantity, Some("mass"));
+        assert_eq!(info.status, Status::Current);
     }
 
     #[test]
     fn the_sources_are_revision_17() {
         assert_eq!(LATEST_REVISION.get(), 17);
-        let revisions: Vec<_> = SOURCES.iter().map(|source| source.revision.get()).collect();
+        let revisions: Vec<u16> = SOURCES.iter().map(|source| source.revision.get()).collect();
         assert_eq!(revisions, [17]);
     }
 
-    #[cfg(feature = "generated-tests")]
+    #[cfg(feature = "serde")]
     #[test]
-    fn every_code_round_trips() {
-        for unit in UnitOfMeasure::ALL {
-            let code: UnitCode = unit.code().parse().unwrap();
-            assert_eq!(code.as_str(), unit.code());
-            assert_eq!(UnitOfMeasure::from_unit_code(code), *unit);
-            let parsed: UnitOfMeasure = unit.code().parse().unwrap();
-            assert_eq!(parsed, *unit);
-            assert_eq!(unit.unit_code(), code);
-        }
-    }
-
-    #[cfg(feature = "case-insensitive")]
-    #[test]
-    fn case_insensitive_lookup() {
-        let kg = UnitOfMeasure::from_code_ignore_case("kgm").unwrap();
-        assert_eq!(kg.code(), "KGM");
-
-        let parsed: UnitOfMeasure = "mtr".parse().unwrap();
-        assert_eq!(parsed.code(), "MTR");
+    fn serde_round_trips_through_the_common_code() {
+        let encoded = serde_json::to_string(&UnitCode::Kgm).ok();
+        assert_eq!(encoded.as_deref(), Some("\"KGM\""));
+        let decoded = encoded.and_then(|encoded| serde_json::from_str::<UnitCode>(&encoded).ok());
+        assert_eq!(decoded, Some(UnitCode::Kgm));
     }
 
     #[cfg(feature = "serde")]
     #[test]
-    fn serde_roundtrip_for_unit_of_measure() {
-        let unit = UnitOfMeasure::from_code("KGM").unwrap();
-        let encoded = serde_json::to_string(&unit).unwrap();
-        assert_eq!(encoded, "\"KGM\"");
-
-        let decoded: UnitOfMeasure = serde_json::from_str(&encoded).unwrap();
-        assert_eq!(decoded, unit);
+    fn serde_decodes_an_escaped_string() {
+        let decoded = serde_json::from_str::<UnitCode>("\"K\\u0047M\"").ok();
+        assert_eq!(decoded, Some(UnitCode::Kgm));
     }
 
     #[cfg(feature = "serde")]
     #[test]
-    fn serde_roundtrip_for_unit_code() {
-        let code: UnitCode = "MTR".parse().unwrap();
-        let encoded = serde_json::to_string(&code).unwrap();
-        assert_eq!(encoded, "\"MTR\"");
+    fn serde_decodes_from_a_reader() {
+        let decoded = serde_json::from_reader::<_, UnitCode>(&b"\"KGM\""[..]).ok();
+        assert_eq!(decoded, Some(UnitCode::Kgm));
+    }
 
-        let decoded: UnitCode = serde_json::from_str(&encoded).unwrap();
-        assert_eq!(decoded, code);
+    #[cfg(feature = "serde")]
+    #[test]
+    fn serde_refuses_an_unknown_code() {
+        let refused =
+            serde_json::from_str::<UnitCode>("\"ZZZZ\"").map_err(|error| error.to_string());
+        assert!(
+            refused
+                .as_ref()
+                .is_err_and(|message| message.contains("unknown UN/CEFACT common code")),
+            "{refused:?}"
+        );
     }
 
     #[cfg(feature = "serde")]
     #[test]
     fn serde_writes_a_status_in_kebab_case() {
         assert_eq!(
-            serde_json::to_string(&Status::Deprecated).unwrap(),
-            "\"deprecated\""
+            serde_json::to_string(&Status::Deprecated).ok().as_deref(),
+            Some("\"deprecated\"")
+        );
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn serde_writes_unit_info_with_its_code_as_text() {
+        let encoded = serde_json::to_string(&UnitCode::Kgm.info()).ok();
+        assert!(
+            encoded.as_deref().is_some_and(
+                |encoded| encoded.starts_with("{\"code\":\"KGM\",\"name\":\"kilogram\"")
+            ),
+            "{encoded:?}"
         );
     }
 }

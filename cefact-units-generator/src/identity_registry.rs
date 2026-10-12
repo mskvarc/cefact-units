@@ -176,7 +176,6 @@ mod tests {
         UnitRecord {
             code: code.to_owned(),
             code_variant: code.to_owned(),
-            unit_variant: code.to_owned(),
             name: code.to_owned(),
             symbol: None,
             quantity: None,
