@@ -20,7 +20,7 @@ Every code has a numeric identity, `UnitCode::id()`, a `UnitCodeId` from 1 to 32
 
 ```toml
 [dependencies]
-cefact-units = "0.2"
+cefact-units = "1"
 ```
 
 ```rust
